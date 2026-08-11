@@ -193,6 +193,16 @@ internal static partial class User32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool GetCursorPos(out POINT lpPoint);
 
+    /// <summary>取指定屏幕坐标下的窗口。用于拖放命中判定。</summary>
+    [LibraryImport(Lib)]
+    public static partial nint WindowFromPoint(POINT Point);
+
+    /// <summary>取顶层祖先窗口。WindowFromPoint 返回的可能是子控件，需要向上找到顶层窗口。</summary>
+    [LibraryImport(Lib)]
+    public static partial nint GetAncestor(nint hwnd, uint gaFlags);
+
+    public const uint GA_ROOT = 2;
+
     // ---- WinEvent 钩子 ----
 
     public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
@@ -244,8 +254,19 @@ internal static partial class User32
     public const uint PM_REMOVE = 0x0001;
     public const uint WM_QUIT = 0x0012;
 
+    public const uint PM_NOREMOVE = 0x0000;
+
     [LibraryImport(Lib, EntryPoint = "GetMessageW", SetLastError = true)]
     public static partial int GetMessage(out MSG lpMsg, nint hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+
+    /// <summary>
+    /// 线程的消息队列是惰性创建的。调用一次 PeekMessage 可以强制建立它 ——
+    /// AttachThreadInput 要求参与的两个线程都有输入队列，否则直接失败。
+    /// </summary>
+    [LibraryImport(Lib, EntryPoint = "PeekMessageW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool PeekMessage(
+        out MSG lpMsg, nint hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
 
     [LibraryImport(Lib, EntryPoint = "TranslateMessage")]
     [return: MarshalAs(UnmanagedType.Bool)]

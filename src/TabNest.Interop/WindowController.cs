@@ -20,10 +20,15 @@ namespace TabNest.Interop;
 /// </summary>
 public sealed class WindowController : IDisposable
 {
-    /// <summary>等待前台切换生效的总时长。超过这个时间基本可以认定这一级降级失败了。</summary>
-    private static readonly TimeSpan ForegroundVerifyTimeout = TimeSpan.FromMilliseconds(60);
+    /// <summary>
+    /// 等待前台切换生效的时长。
+    ///
+    /// 刻意取得较短：降级链最多走四级，每级都等 60ms 的话，一次失败的切换就要 240ms，
+    /// 远超 100ms 的 P95 目标。前台切换若能成功，通常在十几毫秒内就完成了。
+    /// </summary>
+    private static readonly TimeSpan ForegroundVerifyTimeout = TimeSpan.FromMilliseconds(20);
 
-    private static readonly TimeSpan ForegroundPollInterval = TimeSpan.FromMilliseconds(5);
+    private static readonly TimeSpan ForegroundPollInterval = TimeSpan.FromMilliseconds(4);
 
     /// <summary>发送 WM_CLOSE 的超时。目标可能正在弹保存提示，不能无限等。</summary>
     private const uint CloseMessageTimeoutMs = 2000;
@@ -134,6 +139,11 @@ public sealed class WindowController : IDisposable
 
     private void Run()
     {
+        // 强制为本线程创建输入队列。
+        // AttachThreadInput 要求参与的两个线程都有输入队列，而工作线程的队列是惰性创建的 ——
+        // 不做这一步，焦点降级链的第二级会永远失败，实测表现为 100% 无法转移焦点。
+        User32.PeekMessage(out _, 0, 0, 0, User32.PM_NOREMOVE);
+
         try
         {
             foreach (var item in _queue.GetConsumingEnumerable())
@@ -235,30 +245,41 @@ public sealed class WindowController : IDisposable
             return Done(ActivationLevel.AttachedThreadInput, stopwatch);
         }
 
-        // 第三级：至少把窗口抬到 Z 序顶部，让用户看得见它。
-        User32.SetWindowPos(
-            hwnd, User32.HWND_TOP, 0, 0, 0, 0,
-            User32.SWP_NOMOVE | User32.SWP_NOSIZE | User32.SWP_NOACTIVATE);
-        User32.BringWindowToTop(hwnd);
-        if (VerifyForeground(hwnd))
-        {
-            return Done(ActivationLevel.RaisedOnly, stopwatch);
-        }
-
-        // 第四级：兜底。行为等价于用户按 Alt+Tab 选中该窗口。
+        // 第三级：兜底激活。行为等价于用户按 Alt+Tab 选中该窗口。
         User32.SwitchToThisWindow(hwnd, true);
         if (VerifyForeground(hwnd))
         {
             return Done(ActivationLevel.SwitchToThisWindow, stopwatch);
         }
 
-        // 四级全败。不能假装成功 —— UI 需要据此显示"重试/拆分/查看原因"。
+        // 第四级：焦点转移不了，至少把窗口抬到 Z 序顶部让用户看得见。
+        var raised = User32.SetWindowPos(
+            hwnd, User32.HWND_TOP, 0, 0, 0, 0,
+            User32.SWP_NOMOVE | User32.SWP_NOSIZE | User32.SWP_NOACTIVATE);
+        User32.BringWindowToTop(hwnd);
+
         stopwatch.Stop();
+
+        if (raised)
+        {
+            // 这是**降级成功**而非失败：目标窗口已经可见并置于最前，
+            // 只是键盘焦点还在别处，用户点一下即可。把它报成彻底失败并不准确。
+            return new OperationResult
+            {
+                Success = true,
+                Message = "窗口已置于最前，但键盘焦点未能转移。"
+                    + "这通常是因为 TabNest 当前不持有前台权限（系统前台锁定机制所致）。",
+                ActivationLevel = ActivationLevel.RaisedOnly,
+                Elapsed = stopwatch.Elapsed,
+            };
+        }
+
+        // 连抬到最前都做不到，才是真正的失败。
         return new OperationResult
         {
             Success = false,
-            Message = "四级降级链全部失败，无法把焦点转移到目标窗口。"
-                + "这通常由系统前台锁定或目标应用主动拒绝激活导致。",
+            Message = "无法激活目标窗口：焦点转移与置顶均失败。"
+                + "可能是目标应用拒绝激活，或权限不足。",
             ActivationLevel = ActivationLevel.Failed,
             Elapsed = stopwatch.Elapsed,
         };

@@ -9,6 +9,24 @@ namespace TabNest.Interop;
 /// <param name="WorkArea">工作区（扣除任务栏）。</param>
 public readonly record struct MonitorFacts(string DeviceName, PixelRect Bounds, PixelRect WorkArea);
 
+/// <summary>鼠标位置查询。让上层不必接触 Win32 结构体。</summary>
+public static class CursorPosition
+{
+    public static bool TryGet(out int x, out int y)
+    {
+        if (User32.GetCursorPos(out var pt))
+        {
+            x = pt.X;
+            y = pt.Y;
+            return true;
+        }
+
+        x = 0;
+        y = 0;
+        return false;
+    }
+}
+
 public static class MonitorLookup
 {
     public static MonitorFacts ForWindow(nint hwnd)

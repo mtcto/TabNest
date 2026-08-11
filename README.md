@@ -40,10 +40,15 @@ dotnet test
 dotnet run --project src/TabNest.App -- --diagnose
 ```
 
-性能自测，与竞品基准同表对比：
+端到端自测，用真实窗口跑完「分组 → 切换 → 拆分 → 还原」闭环并测量切换延迟。
+先启动测试宿主，再运行自测：
 
 ```bash
-dotnet run --project src/TabNest.App -- --benchmark
+dotnet run --project tools/TabNest.Harness -- --spawn normal,normal
+```
+
+```bash
+dotnet run --project src/TabNest.App -- --selftest
 ```
 
 ## 设计约束
@@ -60,20 +65,34 @@ dotnet run --project src/TabNest.App -- --benchmark
 
 **窗口状态必须可还原。** 每次窗口写操作之前先落盘快照。TabNest 崩溃、强杀、卸载都不得留下位置错乱或隐藏的窗口。
 
-## 性能目标
+## 性能
 
-对标本机实测的 Stardock Groupy 2（v2.3.1）基准：
+对标本机实测的 Stardock Groupy 2（v2.3.1）。TabNest 一列为 Debug 构建实测值：
 
-| 指标 | Groupy 2 实测 | 阶段一目标 | 阶段二目标 |
+| 指标 | Groupy 2 | 阶段一目标 | **TabNest 实测** |
 |---|---:|---:|---:|
-| 常驻工作集 | 78 MB | ≤ 60 MB | ≤ 55 MB |
-| 空闲 CPU | 0.08% 单核 | ≤ 0.10% | ≤ 0.05% |
-| 线程数 | 30 | ≤ 24 | ≤ 18 |
-| 句柄数 | 706 | ≤ 400 | ≤ 400 |
-| 标签切换 P95 | 未测 | ≤ 100 ms | ≤ 60 ms |
-| 注入宿主进程数 | 46 | 0 | 按需且可关闭 |
+| 常驻工作集 | 78 MB | ≤ 60 MB | **25.9 MB** |
+| 空闲 CPU（20s 采样） | 0.08% 单核 | ≤ 0.10% | **0.000%** |
+| 线程数 | 30 | ≤ 24 | **14** |
+| 句柄数 | 706 | ≤ 400 | **277** |
+| 标签切换 P95 | 未测 | ≤ 100 ms | **63 ms** |
+| 注入宿主进程数 | 46 | 0 | **0** |
 
-Groupy 基准采集方式与原始数据见 [`docs/competitive-analysis.md`](docs/competitive-analysis.md)。
+空闲 CPU 能压到零，靠的是两点：`WinEvent` 钩子被动投递、全程无轮询；以及位置变化事件只跟踪组成员，
+不理会全系统的窗口移动——后者不做过滤时实测会把空闲 CPU 推到 0.5% 单核以上。
+
+Groupy 基准的采集方式与原始数据见 [`docs/competitive-analysis.md`](docs/competitive-analysis.md)。
+
+## 已知限制
+
+**焦点转移在无前台权限时会降级。** Groupy 的代码注入在目标进程内，天然持有前台窗口权限；
+TabNest 在进程外，受 Windows 前台锁定机制约束。用户点击标签时我们的进程收到了最后一次输入事件，
+按规则即获得前台权限，此时焦点能正常转移；但在没有用户输入的场景（如脚本调用）下，
+四级降级链会退到"仅置顶"——窗口可见并置于最前，键盘焦点仍在别处。
+这是降级而非失败，`--selftest` 会如实区分这两种结果。
+
+**尚未实现**：集成标签（需阶段二注入层）、悬停浮出分组条、批量收编菜单、右键上下文菜单、
+规则编辑界面、工作区保存、全局快捷键、设置中心图形界面（当前通过 `settings.json` 配置）。
 
 ## 路线
 

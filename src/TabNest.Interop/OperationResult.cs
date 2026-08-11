@@ -11,11 +11,11 @@ public enum ActivationLevel
     /// <summary>附加前台线程输入队列后成功。</summary>
     AttachedThreadInput = 2,
 
-    /// <summary>仅抬到 Z 序顶部，焦点未必转移。</summary>
-    RaisedOnly = 3,
+    /// <summary>SwitchToThisWindow 兜底成功。</summary>
+    SwitchToThisWindow = 3,
 
-    /// <summary>SwitchToThisWindow 兜底。</summary>
-    SwitchToThisWindow = 4,
+    /// <summary>降级成功：窗口已置于最前，但键盘焦点未转移。用户点一下即可继续操作。</summary>
+    RaisedOnly = 4,
 
     /// <summary>四级全部失败。</summary>
     Failed = 5,

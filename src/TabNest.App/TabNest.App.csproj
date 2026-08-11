@@ -30,9 +30,15 @@
     <ProjectReference Include="..\TabNest.Interop\TabNest.Interop.csproj" />
   </ItemGroup>
 
+  <!--
+    标签轨道用 GDI 自绘而非 Direct2D。
+
+    最初计划用 Direct2D，理由是"比 Groupy 的 GDI+ 在高 DPI 下更清晰"。
+    但这个理由站不住：Groupy 在高 DPI 下发糊是因为它用位图皮肤（Default.spak）
+    需要拉伸，而不是因为 GDI 本身。矢量绘制加 ClearType 文本在任何 DPI 下都清晰。
+    既然收益是边际的，就不值得多背一个原生互操作依赖。
+  -->
   <ItemGroup>
-    <PackageReference Include="Vortice.Direct2D1" />
-    <PackageReference Include="Vortice.DXGI" />
     <PackageReference Include="WPF-UI" />
   </ItemGroup>
 

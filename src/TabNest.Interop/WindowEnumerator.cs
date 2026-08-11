@@ -68,6 +68,19 @@ public sealed class WindowEnumerator(ProcessInspector processes)
         return User32.GetWindowTextLength(hwnd) > 0;
     }
 
+    /// <summary>
+    /// 取屏幕坐标下的顶层窗口。
+    /// <c>WindowFromPoint</c> 返回的可能是子控件，必须向上找到顶层窗口 ——
+    /// 否则拖放会命中一个按钮而不是它所属的窗口。
+    /// </summary>
+    public static nint TopLevelWindowAt(PixelPoint screenPoint)
+    {
+        var pt = new POINT { X = screenPoint.X, Y = screenPoint.Y };
+        var hwnd = User32.WindowFromPoint(pt);
+
+        return hwnd == 0 ? 0 : User32.GetAncestor(hwnd, User32.GA_ROOT);
+    }
+
     /// <summary>采集单个窗口的完整信息。窗口在采集过程中消失时返回 null。</summary>
     public WindowInfo? Describe(nint hwnd)
     {

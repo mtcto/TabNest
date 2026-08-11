@@ -5,6 +5,7 @@ internal enum RunKind
     Interactive,
     Diagnose,
     Benchmark,
+    SelfTest,
     Version,
     Help,
 }
@@ -32,6 +33,9 @@ internal static class CommandLine
                     break;
                 case "benchmark":
                     kind = RunKind.Benchmark;
+                    break;
+                case "selftest":
+                    kind = RunKind.SelfTest;
                     break;
                 case "version":
                 case "v":

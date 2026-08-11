@@ -28,6 +28,7 @@ internal static class Program
             RunKind.Help => RunHelp(),
             RunKind.Diagnose => Diagnostics.DiagnoseCommand.Run(mode),
             RunKind.Benchmark => Diagnostics.BenchmarkCommand.Run(mode),
+            RunKind.SelfTest => Diagnostics.SelfTestCommand.Run(mode),
             _ => RunInteractive(mode),
         };
     }
@@ -47,6 +48,7 @@ internal static class Program
               TabNest                启动常驻托盘程序
               TabNest --diagnose     列出当前窗口及可分组性判定原因（无 UI）
               TabNest --benchmark    自测性能指标并与基准对比（无 UI）
+              TabNest --selftest     用 Harness 测试窗口跑完整分组闭环（无 UI）
               TabNest --version      显示版本
               TabNest --help         显示本帮助
 
@@ -59,10 +61,7 @@ internal static class Program
 
     private static int RunInteractive(RunMode mode)
     {
-        // 常驻模式将在后续任务中接入：单实例守卫 → 托盘 → 窗口观察 → 标签轨道。
-        // 当前仅占位，保证骨架可构建、可启动、可退出。
         _ = mode;
-        Console.WriteLine("TabNest 常驻模式尚未实现，请使用 --diagnose 验证窗口层。");
-        return 0;
+        return InteractiveHost.Run();
     }
 }
