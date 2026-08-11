@@ -56,6 +56,13 @@ internal static partial class User32
     public const int GWL_STYLE = -16;
     public const int GWL_EXSTYLE = -20;
 
+    /// <summary>
+    /// 窗口的属主（owner），不是父窗口。
+    /// 设置属主后，该窗口始终显示在属主之上，并**跟随属主一起在 Z 序中升降** ——
+    /// 这正是标签轨道需要的行为：贴着目标窗口，但不会浮在所有应用之上。
+    /// </summary>
+    public const int GWLP_HWNDPARENT = -8;
+
     public const long WS_VISIBLE = 0x10000000;
     public const long WS_CHILD = 0x40000000;
     public const long WS_CAPTION = 0x00C00000;

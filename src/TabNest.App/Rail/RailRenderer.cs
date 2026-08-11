@@ -16,6 +16,9 @@ public sealed record RailRenderState
     public WindowIdentity? HoveredIdentity { get; init; }
     public WindowIdentity? HoveredCloseIdentity { get; init; }
 
+    /// <summary>光标是否停在「关闭整组」按钮上。</summary>
+    public bool IsCloseGroupHovered { get; init; }
+
     /// <summary>拖拽重排时的插入指示线位置，null 表示不显示。</summary>
     public int? DropIndicatorIndex { get; init; }
 }
@@ -45,6 +48,9 @@ internal static class RailRenderer
 
         var canvas = paint.Canvas;
         canvas.FillRect(PixelRect.FromSize(0, 0, width, height), state.Theme.Background);
+
+        PaintMenuButton(canvas, state);
+        PaintCloseGroupButton(canvas, state);
 
         foreach (var layout in state.Layout.Tabs)
         {
@@ -102,6 +108,68 @@ internal static class RailRenderer
 
             canvas.DrawCross(layout.CloseBounds, textColor, layout.CloseBounds.Width / 4);
         }
+    }
+
+    /// <summary>
+    /// 画左侧菜单按钮。
+    /// 用三条横线（汉堡图标）而非字形，避免依赖特定字体是否收录该字符 ——
+    /// 这在中文系统和不同 Windows 版本上并不总是成立。
+    /// </summary>
+    private static void PaintMenuButton(GdiCanvas canvas, RailRenderState state)
+    {
+        var bounds = state.Layout.MenuButton;
+        if (bounds.Width <= 0)
+        {
+            return;
+        }
+
+        var lineWidth = Math.Max(10, bounds.Width / 2);
+        var lineHeight = Math.Max(1, bounds.Height / 20);
+        var gap = Math.Max(3, bounds.Height / 8);
+
+        var x = bounds.Left + ((bounds.Width - lineWidth) / 2);
+        var centerY = bounds.Top + (bounds.Height / 2);
+
+        for (var i = -1; i <= 1; i++)
+        {
+            canvas.FillRect(
+                PixelRect.FromSize(x, centerY + (i * gap) - (lineHeight / 2), lineWidth, lineHeight),
+                state.Theme.InactiveText);
+        }
+    }
+
+    /// <summary>
+    /// 画右侧「关闭整组」按钮。
+    /// 用比标签关闭按钮更大的叉，以示区别 —— 这个按钮会一次关掉组内所有窗口，
+    /// 和关掉单个标签完全不是一个量级的操作。
+    /// </summary>
+    private static void PaintCloseGroupButton(GdiCanvas canvas, RailRenderState state)
+    {
+        var bounds = state.Layout.CloseGroupButton;
+        if (bounds.Width <= 0)
+        {
+            return;
+        }
+
+        var hovered = state.IsCloseGroupHovered;
+
+        if (hovered)
+        {
+            // 悬停时用警示红，让用户在点下去之前意识到这不是普通的关闭。
+            canvas.FillRoundRect(bounds, 0xFFC42B1C, 4);
+        }
+
+        var size = Math.Min(bounds.Width, bounds.Height);
+        var square = PixelRect.FromSize(
+            bounds.Left + ((bounds.Width - size) / 2),
+            bounds.Top + ((bounds.Height - size) / 2),
+            size,
+            size);
+
+        canvas.DrawCross(
+            square,
+            hovered ? 0xFFFFFFFF : state.Theme.InactiveText,
+            size / 3);
     }
 
     private static void PaintDropIndicator(GdiCanvas canvas, RailRenderState state, int height)

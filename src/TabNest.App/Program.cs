@@ -29,6 +29,9 @@ internal static class Program
             RunKind.Diagnose => Diagnostics.DiagnoseCommand.Run(mode),
             RunKind.Benchmark => Diagnostics.BenchmarkCommand.Run(mode),
             RunKind.SelfTest => Diagnostics.SelfTestCommand.Run(mode),
+            RunKind.Watch => Diagnostics.WatchCommand.Run(mode),
+            RunKind.RailTest => Diagnostics.RailTestCommand.Run(mode),
+            RunKind.GroupTest => Diagnostics.GroupTestCommand.Run(mode),
             _ => RunInteractive(mode),
         };
     }
@@ -48,6 +51,7 @@ internal static class Program
               TabNest                启动常驻托盘程序
               TabNest --diagnose     列出当前窗口及可分组性判定原因（无 UI）
               TabNest --benchmark    自测性能指标并与基准对比（无 UI）
+              TabNest --watch        实时监视窗口事件与拖放判定（无 UI）
               TabNest --selftest     用 Harness 测试窗口跑完整分组闭环（无 UI）
               TabNest --version      显示版本
               TabNest --help         显示本帮助

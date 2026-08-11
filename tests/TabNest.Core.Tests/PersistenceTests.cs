@@ -246,6 +246,58 @@ public sealed class PersistenceTests : IDisposable
     // 前向兼容
     // ------------------------------------------------------------------
 
+    // ------------------------------------------------------------------
+    // 会话快照
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 会话快照可以序列化含窗口句柄的组()
+    {
+        // 这条曾经在生产中失败：句柄字段原本是 nint，而 System.Text.Json
+        // 明确不支持序列化 IntPtr。写快照排在执行窗口指令之前，异常一抛后面全不执行，
+        // 表现为"分组完全没反应"，且异常被上层吞掉，没有任何线索。
+        var (manager, _) = TestData.GroupOf(2);
+        var store = new AtomicJsonStore<SessionSnapshot>(PathFor("session.json"), SessionSnapshot.Empty);
+
+        var snapshot = SessionSnapshot.Capture(manager.Groups, TestData.Now);
+
+        var exception = Record.Exception(() => store.Save(snapshot));
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void 会话快照往返后句柄与身份保持一致()
+    {
+        var (manager, _) = TestData.GroupOf(2);
+        var store = new AtomicJsonStore<SessionSnapshot>(PathFor("session.json"), SessionSnapshot.Empty);
+
+        store.Save(SessionSnapshot.Capture(manager.Groups, TestData.Now));
+        var loaded = store.Load().Value;
+
+        var member = loaded.Groups.Single().Members.First();
+
+        // 身份必须完整还原，否则崩溃恢复会把窗口认错 —— 甚至挪动一个无关的新窗口。
+        Assert.Equal(TestData.Id(1), member.ToIdentity());
+    }
+
+    [Fact]
+    public void 有组时快照标记为脏()
+    {
+        var (manager, _) = TestData.GroupOf(2);
+
+        var snapshot = SessionSnapshot.Capture(manager.Groups, TestData.Now);
+
+        // 脏标志是崩溃判定的依据：非正常退出时它保持 true，下次启动据此还原窗口。
+        Assert.True(snapshot.IsDirty);
+        Assert.True(snapshot.NeedsRecovery);
+    }
+
+    [Fact]
+    public void 空快照不需要恢复()
+    {
+        Assert.False(SessionSnapshot.Empty.NeedsRecovery);
+    }
+
     [Fact]
     public void 未知字段不会导致读取失败()
     {

@@ -9,6 +9,14 @@ internal static partial class Dwmapi
     public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
     public const int DWMWA_CLOAKED = 14;
 
+    /// <summary>窗口圆角偏好（Windows 11 22000+）。</summary>
+    public const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+
+    public const int DWMWCP_DEFAULT = 0;
+    public const int DWMWCP_DONOTROUND = 1;
+    public const int DWMWCP_ROUND = 2;
+    public const int DWMWCP_ROUNDSMALL = 3;
+
     /// <summary>
     /// 取窗口的真实可见边框。
     ///
@@ -26,4 +34,12 @@ internal static partial class Dwmapi
 
     [LibraryImport(Lib)]
     public static partial int DwmIsCompositionEnabled([MarshalAs(UnmanagedType.Bool)] out bool pfEnabled);
+
+    /// <summary>
+    /// 设置窗口属性。可跨进程作用于其他应用的窗口 ——
+    /// 用于在分组期间把成员窗口的顶部改为直角，与上方的分组条严丝合缝地拼成一体。
+    /// </summary>
+    [LibraryImport(Lib)]
+    public static partial int DwmSetWindowAttribute(
+        nint hwnd, int dwAttribute, ref int pvAttribute, int cbAttribute);
 }

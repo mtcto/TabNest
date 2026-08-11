@@ -6,6 +6,9 @@ internal enum RunKind
     Diagnose,
     Benchmark,
     SelfTest,
+    Watch,
+    RailTest,
+    GroupTest,
     Version,
     Help,
 }
@@ -36,6 +39,15 @@ internal static class CommandLine
                     break;
                 case "selftest":
                     kind = RunKind.SelfTest;
+                    break;
+                case "watch":
+                    kind = RunKind.Watch;
+                    break;
+                case "railtest":
+                    kind = RunKind.RailTest;
+                    break;
+                case "grouptest":
+                    kind = RunKind.GroupTest;
                     break;
                 case "version":
                 case "v":

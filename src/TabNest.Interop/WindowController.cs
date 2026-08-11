@@ -33,6 +33,9 @@ public sealed class WindowController : IDisposable
     /// <summary>发送 WM_CLOSE 的超时。目标可能正在弹保存提示，不能无限等。</summary>
     private const uint CloseMessageTimeoutMs = 2000;
 
+    /// <summary>窗口不可见边框的厚度。只随样式与 DPI 变化，缓存以避免拖动时每帧查 DWM。</summary>
+    private readonly Dictionary<nint, BorderPadding> _borderPadding = [];
+
     private readonly BlockingCollection<WorkItem> _queue = new(new ConcurrentQueue<WorkItem>());
     private readonly Thread _worker;
     private readonly TaskbarButtonController _taskbar = new();
@@ -195,6 +198,7 @@ public sealed class WindowController : IDisposable
                 LowerWindowAction => Lower(hwnd, stopwatch),
                 RestoreWindowAction restore => Restore(hwnd, restore.Snapshot, stopwatch),
                 SetTaskbarButtonAction taskbar => SetTaskbarButton(hwnd, taskbar.Visible, stopwatch),
+                RestoreWindowCornersAction => RestoreCorners(hwnd, stopwatch),
                 CloseWindowAction => Close(hwnd, stopwatch),
                 _ => OperationResult.Fail($"未知指令类型 {action.GetType().Name}。"),
             };
@@ -356,33 +360,48 @@ public sealed class WindowController : IDisposable
     /// DWM 可见边框。两者在 Windows 10/11 上左右各差约 7 像素，直接传入会让成员窗口
     /// 每次对齐都往外扩一圈。因此先算出两者的差值再补偿。
     /// </summary>
-    private static OperationResult AlignTo(nint hwnd, PixelRect target, Stopwatch stopwatch)
+    private OperationResult AlignTo(nint hwnd, PixelRect target, Stopwatch stopwatch)
     {
         if (User32.IsHungAppWindow(hwnd))
         {
             return OperationResult.Fail("目标窗口无响应，已跳过对齐。");
         }
 
-        // 最大化的窗口不做对齐：强行 SetWindowPos 会让它脱离最大化状态，
-        // 用户会看到窗口莫名其妙缩小。
+        // 最大化的窗口无法被 SetWindowPos 定位，必须先还原成普通状态。
+        //
+        // 早期版本在这里直接跳过对齐，结果是：只要有一个成员窗口处于最大化，
+        // 它就永远不会被移动到组矩形，用户看到"有标签栏但窗口根本没合并"。
+        // 原始的最大化状态已记在快照里，拆分时会还原回去，所以这里的还原是安全的。
         if (User32.IsZoomed(hwnd))
         {
-            return Done(ActivationLevel.NotAttempted, stopwatch);
+            User32.ShowWindow(hwnd, User32.SW_RESTORE);
         }
 
-        if (!User32.GetWindowRect(hwnd, out var raw))
+        // 不可见边框的厚度只取决于窗口样式与 DPI，拖动过程中不会变。
+        // 每帧每窗口都查一次 DWM 是拖动卡顿的主要来源之一，因此缓存起来。
+        if (!_borderPadding.TryGetValue(hwnd, out var pad))
         {
-            return OperationResult.Fail("无法读取窗口矩形。", Marshal.GetLastWin32Error());
+            if (!User32.GetWindowRect(hwnd, out var raw))
+            {
+                return OperationResult.Fail("无法读取窗口矩形。", Marshal.GetLastWin32Error());
+            }
+
+            var visible = WindowEnumerator.ReadVisibleBounds(hwnd);
+            var rawRect = raw.ToPixelRect();
+
+            pad = new BorderPadding(
+                visible.Left - rawRect.Left,
+                visible.Top - rawRect.Top,
+                rawRect.Right - visible.Right,
+                rawRect.Bottom - visible.Bottom);
+
+            _borderPadding[hwnd] = pad;
         }
 
-        var visible = WindowEnumerator.ReadVisibleBounds(hwnd);
-        var rawRect = raw.ToPixelRect();
-
-        // 不可见边框在各边上的厚度。
-        var padLeft = visible.Left - rawRect.Left;
-        var padTop = visible.Top - rawRect.Top;
-        var padRight = rawRect.Right - visible.Right;
-        var padBottom = rawRect.Bottom - visible.Bottom;
+        var padLeft = pad.Left;
+        var padTop = pad.Top;
+        var padRight = pad.Right;
+        var padBottom = pad.Bottom;
 
         var x = target.Left - padLeft;
         var y = target.Top - padTop;
@@ -393,9 +412,36 @@ public sealed class WindowController : IDisposable
             hwnd, 0, x, y, width, height,
             User32.SWP_NOZORDER | User32.SWP_NOACTIVATE | User32.SWP_NOOWNERZORDER);
 
+        // 刻意**不**修改目标窗口的圆角偏好。
+        //
+        // 曾经在这里把成员窗口改成直角，想让它和分组条拼平。但那是在改用户应用的外观，
+        // 窗口原本是圆角就该保持圆角。消除接缝是分组条自己的责任 ——
+        // 让它向下多覆盖几个像素盖住圆角区域即可，不该反过来改造别人的窗口。
+        //
+        // 另外这里每次对齐都调一次 DWM 属性设置，拖动整组时每帧每窗口一次，
+        // 是拖动卡顿的原因之一。
         return ok
             ? Done(ActivationLevel.NotAttempted, stopwatch)
             : OperationResult.Fail("移动窗口失败。", Marshal.GetLastWin32Error());
+    }
+
+    private static OperationResult RestoreCorners(nint hwnd, Stopwatch stopwatch)
+    {
+        SetCornerPreference(hwnd, Dwmapi.DWMWCP_DEFAULT);
+        return Done(ActivationLevel.NotAttempted, stopwatch);
+    }
+
+    /// <summary>设置窗口圆角偏好。跨进程有效，失败时静默忽略（纯视觉增强）。</summary>
+    private static void SetCornerPreference(nint hwnd, int preference)
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
+        {
+            return;
+        }
+
+        var value = preference;
+        Dwmapi.DwmSetWindowAttribute(
+            hwnd, Dwmapi.DWMWA_WINDOW_CORNER_PREFERENCE, ref value, sizeof(int));
     }
 
     private static OperationResult Lower(nint hwnd, Stopwatch stopwatch)
@@ -415,6 +461,10 @@ public sealed class WindowController : IDisposable
     /// </summary>
     private OperationResult Restore(nint hwnd, WindowSnapshot snapshot, Stopwatch stopwatch)
     {
+        // 保险起见改回默认圆角：早期版本改过成员窗口的圆角偏好，
+        // 用户可能还留着被改过的窗口，这里顺手复原。
+        SetCornerPreference(hwnd, Dwmapi.DWMWCP_DEFAULT);
+
         var placement = WINDOWPLACEMENT.Create();
         if (!User32.GetWindowPlacement(hwnd, ref placement))
         {
@@ -504,6 +554,9 @@ public sealed class WindowController : IDisposable
 
         _queue.Dispose();
     }
+
+    /// <summary>窗口不可见拖拽边框在各边的厚度。</summary>
+    private readonly record struct BorderPadding(int Left, int Top, int Right, int Bottom);
 
     private sealed record WorkItem(IList<WindowAction> Actions, CancellationToken Cancellation)
     {

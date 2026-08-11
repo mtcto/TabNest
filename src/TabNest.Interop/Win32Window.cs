@@ -114,7 +114,8 @@ public abstract class Win32Window : IDisposable
         catch (Exception ex)
         {
             // 异常绝不能穿出非托管回调边界 —— 那会直接终止进程。
-            System.Diagnostics.Debug.WriteLine($"[TabNest] 窗口过程异常：{ex}");
+            // 但也不能只写 Debug.WriteLine：发布运行时看不到，等于静默失效。
+            Core.Diagnostics.FileLog.Error($"窗口过程处理消息 0x{msg:X} 时抛出异常。", ex);
         }
 
         return WindowClass.DefWindowProc(hwnd, msg, wParam, lParam);
@@ -126,17 +127,124 @@ public abstract class Win32Window : IDisposable
     protected void Invalidate() => WindowClass.InvalidateRect(_hwnd, 0, false);
 
     /// <summary>
-    /// 移动窗口到指定位置并显示，保持置顶。
+    /// 移动窗口到指定位置并显示。
+    ///
     /// 始终带 SWP_NOACTIVATE —— 轨道跟随外部窗口移动时若抢了焦点，
     /// 用户拖动窗口的动作会被打断。
     /// </summary>
-    public void SetBounds(PixelRect bounds, bool topmost = true)
+    /// <param name="bounds">目标矩形。</param>
+    /// <param name="insertAfter">
+    /// 插入到 Z 序中此窗口之后。传 0 表示不改变 Z 序 ——
+    /// 轨道靠属主关系跟随成员窗口，不该自己乱插 Z 序。
+    /// </param>
+    public void SetBounds(PixelRect bounds, nint insertAfter = 0)
     {
+        var flags = User32.SWP_NOACTIVATE | User32.SWP_SHOWWINDOW;
+
+        if (insertAfter == 0)
+        {
+            flags |= User32.SWP_NOZORDER;
+        }
+
         User32.SetWindowPos(
-            _hwnd,
-            topmost ? User32.HWND_TOPMOST : User32.HWND_TOP,
+            _hwnd, insertAfter,
             bounds.Left, bounds.Top, bounds.Width, bounds.Height,
-            User32.SWP_NOACTIVATE | User32.SWP_SHOWWINDOW);
+            flags);
+    }
+
+    /// <summary>
+    /// 设置本窗口的属主。
+    ///
+    /// 属主关系让本窗口始终显示在属主之上，并**跟随属主一起在 Z 序中升降**。
+    /// 这是标签轨道的正确定位方式：用 <c>WS_EX_TOPMOST</c> 会让轨道浮在所有应用之上，
+    /// 切到别的程序时轨道还赖在屏幕上，且其他窗口能穿插到轨道和成员窗口之间。
+    ///
+    /// 属主可以跨进程设置。失败时返回 false，调用方应降级为手动维护 Z 序。
+    /// </summary>
+    /// <returns>
+    /// 是否**确认**设置成功。返回 false 不代表一定失败，只代表无法确认 ——
+    /// 调用方必须始终配合显式的 Z 序维护，不能把可见性押在属主关系上。
+    /// </returns>
+    public bool SetOwner(nint ownerHwnd)
+    {
+        if (_hwnd == 0)
+        {
+            return false;
+        }
+
+        User32.SetWindowLongPtr(_hwnd, User32.GWLP_HWNDPARENT, ownerHwnd);
+
+        // 读回来核对，而不是看错误码：SetWindowLongPtr 失败时不保证设置错误码，
+        // 依赖它会得到"报告成功但什么都没做"的假象。
+        return User32.GetWindowLongPtr(_hwnd, User32.GWLP_HWNDPARENT) == ownerHwnd;
+    }
+
+    /// <summary>窗口当前是否可见。用于诊断轨道为什么看不到。</summary>
+    public bool IsVisible => _hwnd != 0 && User32.IsWindowVisible(_hwnd);
+
+    /// <summary>窗口当前的实际矩形。用于诊断定位是否正确。</summary>
+    public PixelRect ActualBounds =>
+        User32.GetWindowRect(_hwnd, out var rect) ? rect.ToPixelRect() : PixelRect.Empty;
+
+    /// <summary>
+    /// 把窗口裁成"上圆角、下直角"的形状。
+    ///
+    /// 分组条要和下方窗口无缝衔接：上边跟随窗口的圆角，下边必须是直角，
+    /// 否则会在分组条和窗口之间露出两个白色缺口。
+    /// <paramref name="radius"/> 为 0 时恢复成完整矩形（方角窗口、Windows 10、最大化窗口）。
+    /// </summary>
+    public void ApplyTopRoundedRegion(int width, int height, int radius)
+    {
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        if (radius <= 0)
+        {
+            // 传 0 让系统丢弃区域，窗口恢复为完整矩形。
+            Gdi.SetWindowRgn(_hwnd, 0, true);
+            return;
+        }
+
+        // 圆角矩形四角都是圆的，再用一个矩形把下半部分补成直角。
+        var rounded = Gdi.CreateRoundRectRgn(0, 0, width + 1, height + 1, radius * 2, radius * 2);
+        var bottom = Gdi.CreateRectRgn(0, radius, width + 1, height + 1);
+
+        try
+        {
+            Gdi.CombineRgn(rounded, rounded, bottom, Gdi.RGN_OR);
+
+            // SetWindowRgn 成功后区域归系统所有，不可再释放。
+            if (Gdi.SetWindowRgn(_hwnd, rounded, true) == 0)
+            {
+                Gdi.DeleteObject(rounded);
+            }
+        }
+        finally
+        {
+            Gdi.DeleteObject(bottom);
+        }
+    }
+
+    /// <summary>
+    /// 把本窗口置于 Z 序中 <paramref name="target"/> 的正上方。
+    ///
+    /// 注意这里移动的是 <paramref name="target"/> 而不是本窗口：
+    /// <c>SetWindowPos</c> 的 <c>hWndInsertAfter</c> 语义是"排在该窗口**之后**"，
+    /// 也就是更靠后。写成 <c>SetWindowPos(本窗口, target, ...)</c> 会把本窗口塞到
+    /// target 后面去 —— 恰好是想要效果的反面，表现为轨道被成员窗口完全盖住。
+    /// </summary>
+    public void PlaceAbove(nint target)
+    {
+        if (target == 0 || _hwnd == 0)
+        {
+            return;
+        }
+
+        User32.SetWindowPos(
+            target, _hwnd, 0, 0, 0, 0,
+            User32.SWP_NOMOVE | User32.SWP_NOSIZE | User32.SWP_NOACTIVATE);
     }
 
     public void HideWindow() => User32.ShowWindow(_hwnd, User32.SW_HIDE);

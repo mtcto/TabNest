@@ -62,7 +62,17 @@ public sealed class GroupSessionManager
     /// 组矩形取第一个成员的当前位置 —— 用户拖 A 到 B 时，B 是拖放目标，组应当留在 B 的位置上，
     /// 由调用方保证 members[0] 是拖放目标。
     /// </summary>
-    public GroupOperationResult CreateGroup(IReadOnlyList<TabCandidate> members)
+    /// <param name="members">组成员，第一个应为拖放目标。</param>
+    /// <param name="contentBounds">
+    /// 成员窗口应占据的矩形。为 null 时取拖放目标的当前位置。
+    ///
+    /// 调用方需要在这里**预留标签轨道的高度** —— 轨道贴在这个矩形的上方，
+    /// 若直接用窗口原位置，贴着屏幕顶部的窗口会把轨道挤到屏幕外，
+    /// 表现为"分组成功了但看不到分组栏"。
+    /// </param>
+    public GroupOperationResult CreateGroup(
+        IReadOnlyList<TabCandidate> members,
+        PixelRect? contentBounds = null)
     {
         ArgumentNullException.ThrowIfNull(members);
 
@@ -105,7 +115,7 @@ public sealed class GroupSessionManager
             Id = groupId,
             Tabs = tabs,
             State = GroupState.Stable,
-            Bounds = anchor.Window.Bounds,
+            Bounds = contentBounds ?? anchor.Window.Bounds,
             MonitorDeviceName = anchor.Window.MonitorDeviceName,
             CreatedAt = now,
         };
@@ -274,6 +284,36 @@ public sealed class GroupSessionManager
     }
 
     /// <summary>
+    /// 把标签从组中移除，但**保持窗口当前位置不动**。
+    ///
+    /// 用于"用户自己把窗口拖出了分组"这个场景：窗口已经在用户想要的位置上，
+    /// 再按快照弹回分组前的旧位置是在跟用户较劲。
+    /// 与 <see cref="DetachTab"/> 的区别就在于不产生还原指令。
+    /// </summary>
+    public GroupOperationResult DetachTabInPlace(string groupId, WindowIdentity identity)
+    {
+        if (!_groups.TryGetValue(groupId, out var group))
+        {
+            return GroupOperationResult.Fail(GroupOperationError.GroupNotFound, "标签组不存在。");
+        }
+
+        if (group.FindTab(identity) is null)
+        {
+            return GroupOperationResult.Fail(GroupOperationError.TabNotFound, "该标签不在这个组中。");
+        }
+
+        // 任务栏按钮仍要还原：策略可能隐藏过它，不还原窗口就再也回不到任务栏。
+        // 圆角也要改回来：分组期间被改成了直角以便与分组条拼合。
+        return RemoveTab(
+            group,
+            identity,
+            [
+                new SetTaskbarButtonAction(identity, true),
+                new RestoreWindowCornersAction(identity),
+            ]);
+    }
+
+    /// <summary>
     /// 请求关闭标签对应的窗口。
     ///
     /// 只发出关闭请求，**不立即移除标签**：应用有权拒绝关闭或弹出保存提示，
@@ -354,6 +394,14 @@ public sealed class GroupSessionManager
     // ------------------------------------------------------------------
     // 标签属性
     // ------------------------------------------------------------------
+
+    /// <summary>
+    /// 更新组占据的矩形。
+    /// 拖动分组条时必须调用 —— 只把新矩形用在局部变量上而不写回，
+    /// 下一次鼠标移动仍会基于旧矩形计算，窗口被反复拉回原处，表现为"拖不动"。
+    /// </summary>
+    public GroupOperationResult SetGroupBounds(string groupId, PixelRect bounds) =>
+        UpdateGroup(groupId, g => g with { Bounds = bounds });
 
     public GroupOperationResult SetGroupLocked(string groupId, bool locked) =>
         UpdateGroup(groupId, g => g with { IsLocked = locked });

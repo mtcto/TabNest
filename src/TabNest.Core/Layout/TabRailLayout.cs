@@ -16,6 +16,16 @@ public sealed record RailMetrics
     /// <summary>左侧菜单按钮宽度。隐藏菜单按钮时为 0。</summary>
     public int MenuButtonWidth { get; init; } = 28;
 
+    /// <summary>右侧「关闭整组」按钮宽度。为 0 时不显示。</summary>
+    public int CloseGroupButtonWidth { get; init; } = 30;
+
+    /// <summary>
+    /// 顶部圆角半径。由承载窗口的实际圆角决定，不写死 ——
+    /// Windows 10 不给窗口圆角，Windows 11 上应用也可声明直角，
+    /// 写死圆角会在方角窗口上方露出两个缺口。
+    /// </summary>
+    public int TopCornerRadius { get; init; }
+
     /// <summary>按 DPI 缩放。轨道要贴合外部窗口，必须用该窗口所在显示器的 DPI 而非系统 DPI。</summary>
     public RailMetrics ScaleTo(int dpi)
     {
@@ -40,6 +50,10 @@ public sealed record RailMetrics
             IconSize = S(IconSize),
             CloseButtonSize = S(CloseButtonSize),
             MenuButtonWidth = S(MenuButtonWidth),
+            CloseGroupButtonWidth = S(CloseGroupButtonWidth),
+
+            // 圆角半径由调用方按承载窗口实测填入，已是物理像素，不再缩放。
+            TopCornerRadius = TopCornerRadius,
         };
     }
 }
@@ -66,6 +80,34 @@ public sealed record RailLayout
 
     /// <summary>左侧菜单按钮。宽度为 0 表示隐藏。</summary>
     public required PixelRect MenuButton { get; init; }
+
+    /// <summary>右侧「关闭整组」按钮。宽度为 0 表示隐藏。</summary>
+    public PixelRect CloseGroupButton { get; init; }
+
+    /// <summary>顶部圆角半径，跟随承载窗口。</summary>
+    public int TopCornerRadius { get; init; }
+
+    /// <summary>因宽度不足未能显示的标签数。大于 0 时 UI 应给出提示，否则用户会以为标签丢了。</summary>
+    public int HiddenTabCount { get; init; }
+
+    /// <summary>
+    /// 空白拖拽区：既不是标签也不是按钮的区域。
+    /// 在这里按下拖动可以整体移动分组，与拖动普通窗口标题栏的手感一致。
+    /// </summary>
+    public bool IsDragArea(PixelPoint point)
+    {
+        if (MenuButton.Width > 0 && MenuButton.Contains(point))
+        {
+            return false;
+        }
+
+        if (CloseGroupButton.Width > 0 && CloseGroupButton.Contains(point))
+        {
+            return false;
+        }
+
+        return HitTestTab(point) is null;
+    }
 
     /// <summary>命中测试。返回被点中的标签，未命中返回 null。坐标相对轨道窗口。</summary>
     public TabLayout? HitTestTab(PixelPoint point)
@@ -140,16 +182,28 @@ public static class TabRailLayoutEngine
         ArgumentNullException.ThrowIfNull(tabs);
         ArgumentNullException.ThrowIfNull(metrics);
 
-        // 轨道紧贴承载窗口上沿，与窗口同宽。
+        // 轨道与窗口同宽，并向下**多覆盖**一段，盖住窗口顶部两个圆角。
+        //
+        // 只做到"底边贴着窗口顶边"是不够的：窗口自己的圆角会在分组条正下方
+        // 透出后面的桌面，看起来就是没接上。向下压住这段圆角区域即可消除接缝，
+        // 而且不必去改用户窗口的外观 —— 窗口原本是圆角就该保持圆角。
+        var overlap = metrics.TopCornerRadius;
+
         var railBounds = new PixelRect(
             anchorBounds.Left,
             anchorBounds.Top - metrics.Height,
             anchorBounds.Right,
-            anchorBounds.Top);
+            anchorBounds.Top + overlap);
 
         var menuWidth = showMenuButton ? metrics.MenuButtonWidth : 0;
         var menuButton = menuWidth > 0
             ? PixelRect.FromSize(metrics.SidePadding, 0, menuWidth, metrics.Height)
+            : PixelRect.Empty;
+
+        var closeWidth = metrics.CloseGroupButtonWidth;
+        var closeGroupButton = closeWidth > 0
+            ? PixelRect.FromSize(
+                railBounds.Width - metrics.SidePadding - closeWidth, 0, closeWidth, metrics.Height)
             : PixelRect.Empty;
 
         var live = new List<TabItem>(tabs.Count);
@@ -168,17 +222,32 @@ public static class TabRailLayoutEngine
                 Bounds = railBounds,
                 Tabs = [],
                 MenuButton = menuButton,
+                CloseGroupButton = closeGroupButton,
+                TopCornerRadius = metrics.TopCornerRadius,
             };
         }
 
-        var available = railBounds.Width - (metrics.SidePadding * 2) - menuWidth;
+        var available = railBounds.Width - (metrics.SidePadding * 2) - menuWidth - closeWidth;
         var tabWidth = ComputeTabWidth(available, live.Count, metrics);
 
         var layouts = new List<TabLayout>(live.Count);
         var x = metrics.SidePadding + menuWidth;
 
+        // 标签绝不能越过关闭整组按钮：盖住它等于用户再也关不掉这个组。
+        // 上限取按钮左边界本身 —— 标签右边界与它重合是允许的（不重叠），
+        // 多减一个间距会让恰好放得下的最后一个标签被误判为溢出。
+        var limit = closeGroupButton.Width > 0
+            ? closeGroupButton.Left
+            : railBounds.Width - metrics.SidePadding;
+
         foreach (var tab in live)
         {
+            // 放不下就停下。溢出的标签数量记在 HiddenTabCount 里，由 UI 提示用户。
+            if (x + tabWidth > limit)
+            {
+                break;
+            }
+
             var bounds = PixelRect.FromSize(x, 0, tabWidth, metrics.Height);
 
             var iconTop = (metrics.Height - metrics.IconSize) / 2;
@@ -216,6 +285,9 @@ public static class TabRailLayoutEngine
             Bounds = railBounds,
             Tabs = layouts,
             MenuButton = menuButton,
+            CloseGroupButton = closeGroupButton,
+            TopCornerRadius = metrics.TopCornerRadius,
+            HiddenTabCount = live.Count - layouts.Count,
         };
     }
 

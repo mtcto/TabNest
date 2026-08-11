@@ -12,6 +12,11 @@ public sealed record RailInteraction
     public WindowIdentity Target { get; init; }
     public int InsertionIndex { get; init; }
     public PixelPoint ScreenPoint { get; init; }
+
+    /// <summary>拖动分组条时的位移，单位物理像素。</summary>
+    public int DeltaX { get; init; }
+
+    public int DeltaY { get; init; }
 }
 
 public enum RailAction
@@ -21,6 +26,12 @@ public enum RailAction
     DetachTab,
     ReorderTab,
     ShowMenu,
+
+    /// <summary>关闭整组的全部窗口。</summary>
+    CloseGroup,
+
+    /// <summary>拖动分组条，整组窗口一起移动。</summary>
+    MoveGroup,
 }
 
 /// <summary>
@@ -49,13 +60,20 @@ internal sealed class TabRailWindow : Win32Window
     private bool _isPressed;
     private bool _isDragging;
     private bool _mouseTracked;
+    private bool _isMovingGroup;
+    private PixelPoint _lastGroupDragPoint;
+
+    private nint _owner;
 
     public TabRailWindow(string groupId, Action<RailInteraction> onInteraction)
     {
         GroupId = groupId;
         _onInteraction = onInteraction;
 
-        var exStyle = Styles.ToolWindow | Styles.NoActivate | Styles.Topmost;
+        // 刻意不加 WS_EX_TOPMOST：置顶会让轨道浮在所有应用之上，
+        // 切到别的程序时它还赖在屏幕上，而且其他窗口能穿插到轨道和成员窗口之间。
+        // 正确做法是把成员窗口设为轨道的属主，让轨道跟随它一起升降。
+        var exStyle = Styles.ToolWindow | Styles.NoActivate;
 
         CreateWindow(ClassName, "TabNest Rail", Styles.Popup, exStyle, 0, 0, 0, 0);
     }
@@ -63,11 +81,52 @@ internal sealed class TabRailWindow : Win32Window
     public string GroupId { get; }
 
     /// <summary>更新要显示的内容并重绘。必须在 UI 线程调用。</summary>
-    public void Update(RailRenderState state)
+    /// <param name="state">渲染状态。</param>
+    /// <param name="ownerHwnd">当前活动成员窗口，作为轨道的属主。</param>
+    public void Update(RailRenderState state, nint ownerHwnd)
     {
+        var previous = _state;
         _state = state;
+
+        // 尝试建立属主关系。成功的话轨道会自动跟随成员窗口在 Z 序中升降。
+        //
+        // 但**绝不能只依赖它**：SetWindowLongPtr(GWLP_HWNDPARENT) 跨进程设置属主
+        // 在文档上就不受支持，失败时也不保证设置错误码，会出现"报告成功但什么都没做"。
+        // 那样轨道就是一个普通窗口，静静待在成员窗口后面被完全盖住 ——
+        // 表现正是"分组成功了但看不到分组栏"。
+        if (ownerHwnd != _owner && ownerHwnd != 0)
+        {
+            _owner = ownerHwnd;
+            SetOwner(ownerHwnd);
+        }
+
         SetBounds(state.Layout.Bounds);
+
+        // 因此每次更新都显式把轨道抬到成员窗口正上方。这一步是可见性的唯一保证。
+        PlaceAbove(_owner);
+
+        // 尺寸或圆角变化后才重设区域：SetWindowRgn 会触发重绘，每帧都调用会闪。
+        var bounds = state.Layout.Bounds;
+        var radius = state.Layout.TopCornerRadius;
+
+        if (previous is null
+            || previous.Layout.Bounds.Width != bounds.Width
+            || previous.Layout.Bounds.Height != bounds.Height
+            || previous.Layout.TopCornerRadius != radius)
+        {
+            ApplyTopRoundedRegion(bounds.Width, bounds.Height, radius);
+        }
+
         Invalidate();
+    }
+
+    /// <summary>把轨道重新贴到属主窗口正上方。属主的 Z 序变化后调用。</summary>
+    public void RestackAboveOwner()
+    {
+        if (_owner != 0)
+        {
+            PlaceAbove(_owner);
+        }
     }
 
     protected override nint? WndProc(uint msg, nint wParam, nint lParam)
@@ -128,6 +187,36 @@ internal sealed class TabRailWindow : Win32Window
             return;
         }
 
+        // 拖动整组：按屏幕坐标算增量，因为轨道本身会跟着一起移动，
+        // 用窗口内坐标算会得到一个不断自我抵消的错误增量。
+        if (_isPressed && _isMovingGroup)
+        {
+            if (!CursorPosition.TryGet(out var sx, out var sy))
+            {
+                return;
+            }
+
+            var dx = sx - _lastGroupDragPoint.X;
+            var dy = sy - _lastGroupDragPoint.Y;
+
+            if (dx == 0 && dy == 0)
+            {
+                return;
+            }
+
+            _lastGroupDragPoint = new PixelPoint(sx, sy);
+
+            _onInteraction(new RailInteraction
+            {
+                GroupId = GroupId,
+                Action = RailAction.MoveGroup,
+                DeltaX = dx,
+                DeltaY = dy,
+            });
+
+            return;
+        }
+
         if (_isPressed && !_isDragging && Distance(point, _pressPoint) > DragThreshold)
         {
             _isDragging = true;
@@ -142,13 +231,18 @@ internal sealed class TabRailWindow : Win32Window
 
         var hoveredTab = state.Layout.HitTestTab(point)?.Identity;
         var hoveredClose = state.Layout.HitTestCloseButton(point)?.Identity;
+        var hoveredCloseGroup = state.Layout.CloseGroupButton.Width > 0
+            && state.Layout.CloseGroupButton.Contains(point);
 
-        if (state.HoveredIdentity != hoveredTab || state.HoveredCloseIdentity != hoveredClose)
+        if (state.HoveredIdentity != hoveredTab
+            || state.HoveredCloseIdentity != hoveredClose
+            || state.IsCloseGroupHovered != hoveredCloseGroup)
         {
             UpdateState(state with
             {
                 HoveredIdentity = hoveredTab,
                 HoveredCloseIdentity = hoveredClose,
+                IsCloseGroupHovered = hoveredCloseGroup,
             });
         }
     }
@@ -158,15 +252,36 @@ internal sealed class TabRailWindow : Win32Window
         _mouseTracked = false;
 
         if (_state is { } state
-            && (state.HoveredIdentity is not null || state.HoveredCloseIdentity is not null))
+            && (state.HoveredIdentity is not null
+                || state.HoveredCloseIdentity is not null
+                || state.IsCloseGroupHovered))
         {
-            UpdateState(state with { HoveredIdentity = null, HoveredCloseIdentity = null });
+            UpdateState(state with
+            {
+                HoveredIdentity = null,
+                HoveredCloseIdentity = null,
+                IsCloseGroupHovered = false,
+            });
         }
     }
 
     private void OnMouseDown(PixelPoint point)
     {
         if (_state is not { } state)
+        {
+            return;
+        }
+
+        // 左侧菜单按钮：按下即弹出，与 Windows 菜单栏的惯例一致。
+        if (state.Layout.MenuButton.Width > 0 && state.Layout.MenuButton.Contains(point))
+        {
+            EmitMenu(state.Layout.MenuButton, default);
+            return;
+        }
+
+        // 关闭整组按钮在松手时才触发，避免误按下即关掉一整组窗口。
+        if (state.Layout.CloseGroupButton.Width > 0
+            && state.Layout.CloseGroupButton.Contains(point))
         {
             return;
         }
@@ -181,8 +296,21 @@ internal sealed class TabRailWindow : Win32Window
         {
             _isPressed = true;
             _isDragging = false;
+            _isMovingGroup = false;
             _pressPoint = point;
             _pressedTab = tab.Identity;
+            return;
+        }
+
+        // 按在空白处 = 拖动整组，手感与拖普通窗口的标题栏一致。
+        if (state.Layout.IsDragArea(point))
+        {
+            CursorPosition.TryGet(out var sx, out var sy);
+            _isPressed = true;
+            _isDragging = false;
+            _isMovingGroup = true;
+            _lastGroupDragPoint = new PixelPoint(sx, sy);
+            _pressedTab = default;
         }
     }
 
@@ -194,14 +322,28 @@ internal sealed class TabRailWindow : Win32Window
         }
 
         var wasDragging = _isDragging;
+        var wasMovingGroup = _isMovingGroup;
         var pressed = _pressedTab;
 
         _isPressed = false;
         _isDragging = false;
+        _isMovingGroup = false;
 
         if (state.DropIndicatorIndex is not null)
         {
             UpdateState(state with { DropIndicatorIndex = null });
+        }
+
+        if (wasMovingGroup)
+        {
+            return;
+        }
+
+        if (state.Layout.CloseGroupButton.Width > 0
+            && state.Layout.CloseGroupButton.Contains(point))
+        {
+            Emit(RailAction.CloseGroup, default);
+            return;
         }
 
         if (state.Layout.HitTestCloseButton(point) is { } closing)
@@ -241,21 +383,38 @@ internal sealed class TabRailWindow : Win32Window
 
     private void OnRightClick(PixelPoint point)
     {
-        if (_state is not { } state)
+        if (_state is { } state)
         {
-            return;
+            EmitMenu(null, state.Layout.HitTestTab(point)?.Identity ?? default);
         }
+    }
 
-        var target = state.Layout.HitTestTab(point)?.Identity ?? default;
-        
-        CursorPosition.TryGet(out var cx, out var cy);
+    /// <summary>
+    /// 请求弹出菜单。
+    /// <paramref name="anchor"/> 非空时菜单贴着该控件的左下角弹出（菜单按钮的惯例），
+    /// 否则跟随光标（右键的惯例）。
+    /// </summary>
+    private void EmitMenu(PixelRect? anchor, WindowIdentity target)
+    {
+        PixelPoint screenPoint;
+
+        if (anchor is { } rect && _state is { } state)
+        {
+            var bounds = state.Layout.Bounds;
+            screenPoint = new PixelPoint(bounds.Left + rect.Left, bounds.Top + rect.Bottom);
+        }
+        else
+        {
+            CursorPosition.TryGet(out var cx, out var cy);
+            screenPoint = new PixelPoint(cx, cy);
+        }
 
         _onInteraction(new RailInteraction
         {
             GroupId = GroupId,
             Action = RailAction.ShowMenu,
             Target = target,
-            ScreenPoint = new PixelPoint(cx, cy),
+            ScreenPoint = screenPoint,
         });
     }
 

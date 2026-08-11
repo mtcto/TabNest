@@ -5,14 +5,22 @@ namespace TabNest.Core.Persistence;
 /// <summary>一个成员窗口在快照中的记录。</summary>
 public sealed record SessionMember
 {
-    public required nint Handle { get; init; }
+    /// <summary>
+    /// 窗口句柄，存为 <see cref="long"/> 而不是 <see cref="nint"/>。
+    ///
+    /// System.Text.Json 明确不支持序列化 IntPtr，用 nint 会在写快照时抛
+    /// NotSupportedException。而写快照发生在执行窗口指令之前，异常一抛后面全不执行 ——
+    /// 表现为"组建出来了，但窗口没对齐、分组栏也没出现"，且异常还被上层吞掉，完全静默。
+    /// </summary>
+    public required long Handle { get; init; }
+
     public required int ProcessId { get; init; }
     public required long ProcessStartTicks { get; init; }
     public required string Title { get; init; }
     public required string ProcessName { get; init; }
     public required WindowSnapshot Snapshot { get; init; }
 
-    public WindowIdentity ToIdentity() => new(Handle, ProcessId, ProcessStartTicks);
+    public WindowIdentity ToIdentity() => new((nint)Handle, ProcessId, ProcessStartTicks);
 }
 
 /// <summary>一个组在快照中的记录。</summary>
@@ -70,6 +78,7 @@ public sealed record SessionSnapshot
                 members.Add(new SessionMember
                 {
                     Handle = tab.Identity.Handle,
+
                     ProcessId = tab.Identity.ProcessId,
                     ProcessStartTicks = tab.Identity.ProcessStartTicks,
                     Title = tab.Title,

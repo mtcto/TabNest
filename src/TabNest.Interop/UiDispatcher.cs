@@ -61,12 +61,17 @@ public sealed class UiDispatcher : Win32Window
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[TabNest] UI 投递任务异常：{ex}");
+                // 必须落盘。这里原本只写 Debug.WriteLine，发布运行时完全看不到 ——
+                // 结果是编排层任何一次抛异常都表现为"功能静默失效"，无从追查。
+                Core.Diagnostics.FileLog.Error("UI 投递任务抛出异常。", ex);
             }
         }
 
         return 0;
     }
+
+    /// <summary>在当前线程运行消息循环，直到收到 WM_QUIT。</summary>
+    public static void RunMessageLoopEntry() => RunMessageLoop();
 
     /// <summary>在当前线程运行消息循环，直到收到 WM_QUIT。</summary>
     public static void RunMessageLoop()

@@ -105,6 +105,22 @@ internal static partial class Gdi
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool Rectangle(nint hdc, int left, int top, int right, int bottom);
 
+    [LibraryImport(Gdi32, SetLastError = true)]
+    public static partial nint CreateRoundRectRgn(
+        int x1, int y1, int x2, int y2, int w, int h);
+
+    [LibraryImport(Gdi32, SetLastError = true)]
+    public static partial nint CreateRectRgn(int x1, int y1, int x2, int y2);
+
+    public const int RGN_OR = 2;
+
+    [LibraryImport(Gdi32, SetLastError = true)]
+    public static partial int CombineRgn(nint hrgnDst, nint hrgnSrc1, nint hrgnSrc2, int iMode);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    public static partial int SetWindowRgn(
+        nint hWnd, nint hRgn, [MarshalAs(UnmanagedType.Bool)] bool bRedraw);
+
     [LibraryImport(Gdi32, EntryPoint = "MoveToEx", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool MoveToExCore(nint hdc, int x, int y, nint lppt);

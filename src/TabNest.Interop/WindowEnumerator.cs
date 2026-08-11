@@ -81,6 +81,71 @@ public sealed class WindowEnumerator(ProcessInspector processes)
         return hwnd == 0 ? 0 : User32.GetAncestor(hwnd, User32.GA_ROOT);
     }
 
+    /// <summary>
+    /// 取屏幕坐标下、排除指定窗口之后最靠前的顶层窗口。
+    ///
+    /// 拖放命中判定**必须**用这个而不是 <see cref="TopLevelWindowAt"/>：
+    /// 拖拽过程中被拖的窗口就跟在光标底下，<c>WindowFromPoint</c> 永远返回它自己，
+    /// 真正的拖放目标被它盖住了。所以只能沿 Z 序自顶向下找第一个命中的其他窗口。
+    /// </summary>
+    /// <param name="screenPoint">屏幕坐标。</param>
+    /// <param name="excluded">要跳过的窗口，通常是被拖的窗口和 TabNest 自己的轨道。</param>
+    public static nint TopLevelWindowAtExcluding(PixelPoint screenPoint, IReadOnlySet<nint> excluded)
+    {
+        foreach (var hwnd in EnumerateWindowsAt(screenPoint, excluded))
+        {
+            return hwnd;
+        }
+
+        return 0;
+    }
+
+    /// <summary>按 Z 序自顶向下列出全部顶层窗口句柄。用于诊断 Z 序相关问题。</summary>
+    public static IEnumerable<nint> EnumerateAllTopLevel()
+    {
+        var hwnd = User32.GetTopWindow(0);
+        var guard = 0;
+
+        while (hwnd != 0 && guard++ < MaxWindows)
+        {
+            yield return hwnd;
+            hwnd = User32.GetWindow(hwnd, User32.GW_HWNDNEXT);
+        }
+    }
+
+    /// <summary>
+    /// 按 Z 序自顶向下列出光标处的**所有**候选窗口。
+    ///
+    /// 只取最上面那一个是不够的：用户的两个目标窗口之间常常隔着别的应用，
+    /// 此时最上面的是那个无关窗口，下面真正想分组的窗口就永远看不到 ——
+    /// 表现为"中间有程序隔层就无法检测到"。
+    ///
+    /// 返回整条候选链，由调用方挑第一个**可分组**的，从而自动跳过隔层窗口。
+    /// </summary>
+    public static IEnumerable<nint> EnumerateWindowsAt(
+        PixelPoint screenPoint, IReadOnlySet<nint> excluded)
+    {
+        ArgumentNullException.ThrowIfNull(excluded);
+
+        var hwnd = User32.GetTopWindow(0);
+        var guard = 0;
+
+        while (hwnd != 0 && guard++ < MaxWindows)
+        {
+            if (!excluded.Contains(hwnd)
+                && User32.IsWindowVisible(hwnd)
+                && !User32.IsIconic(hwnd)
+                && User32.GetWindowTextLength(hwnd) > 0
+                && !IsCloaked(hwnd)
+                && ReadVisibleBounds(hwnd).Contains(screenPoint))
+            {
+                yield return hwnd;
+            }
+
+            hwnd = User32.GetWindow(hwnd, User32.GW_HWNDNEXT);
+        }
+    }
+
     /// <summary>采集单个窗口的完整信息。窗口在采集过程中消失时返回 null。</summary>
     public WindowInfo? Describe(nint hwnd)
     {
@@ -181,6 +246,45 @@ public sealed class WindowEnumerator(ProcessInspector processes)
     {
         return Dwmapi.DwmGetWindowAttribute(hwnd, Dwmapi.DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0
             && cloaked != 0;
+    }
+
+    /// <summary>
+    /// 目标窗口顶部的圆角半径（物理像素）。0 表示直角。
+    ///
+    /// 分组条要和窗口无缝衔接，圆角就必须跟着窗口走，不能写死：
+    ///   - Windows 10 完全不给窗口圆角，写死圆角会在窗口方角上方露出两个缺口；
+    ///   - Windows 11 默认圆角，但应用可以通过 DWMWA_WINDOW_CORNER_PREFERENCE
+    ///     显式声明 DONOTROUND（不少 Electron 应用和自绘标题栏的工具就这么做）；
+    ///   - 最大化的窗口在 Windows 11 上也是直角。
+    /// </summary>
+    public static int TopCornerRadius(nint hwnd, int dpi)
+    {
+        // Windows 11 之前没有系统级窗口圆角。
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
+        {
+            return 0;
+        }
+
+        // 最大化窗口贴着屏幕边缘，系统不给它圆角。
+        if (User32.IsZoomed(hwnd))
+        {
+            return 0;
+        }
+
+        var preference = Dwmapi.DWMWCP_DEFAULT;
+        Dwmapi.DwmGetWindowAttribute(
+            hwnd, Dwmapi.DWMWA_WINDOW_CORNER_PREFERENCE, out preference, sizeof(int));
+
+        var logical = preference switch
+        {
+            Dwmapi.DWMWCP_DONOTROUND => 0,
+            Dwmapi.DWMWCP_ROUNDSMALL => 4,
+            _ => 8,
+        };
+
+        return logical == 0
+            ? 0
+            : (int)Math.Round(logical * dpi / 96.0, MidpointRounding.AwayFromZero);
     }
 
     /// <summary>

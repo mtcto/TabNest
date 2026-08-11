@@ -53,6 +53,36 @@ public sealed class GroupSessionManagerTests
     }
 
     [Fact]
+    public void 可以指定组矩形以便为轨道预留空间()
+    {
+        var manager = new GroupSessionManager();
+        var reserved = PixelRect.FromSize(100, 134, 800, 566);
+
+        var result = manager.CreateGroup(
+            [TestData.Candidate(1), TestData.Candidate(2)],
+            reserved);
+
+        // 不指定时会沿用拖放目标的原位置；贴着屏幕顶部的窗口会把轨道挤到屏幕外，
+        // 表现为"分组成功但看不到分组栏"。
+        Assert.Equal(reserved, result.Group!.Bounds);
+    }
+
+    [Fact]
+    public void 成员被对齐到指定的组矩形而非窗口原位置()
+    {
+        var manager = new GroupSessionManager();
+        var reserved = PixelRect.FromSize(100, 134, 800, 566);
+
+        var result = manager.CreateGroup(
+            [TestData.Candidate(1), TestData.Candidate(2)],
+            reserved);
+
+        var aligns = result.Actions.OfType<AlignWindowAction>().ToList();
+        Assert.NotEmpty(aligns);
+        Assert.All(aligns, a => Assert.Equal(reserved, a.Bounds));
+    }
+
+    [Fact]
     public void 创建组后第一个成员成为活动标签()
     {
         var (manager, groupId) = TestData.GroupOf(3);
@@ -157,6 +187,86 @@ public sealed class GroupSessionManagerTests
         Assert.Contains(
             result.Actions.OfType<SetTaskbarButtonAction>(),
             a => a.Target == TestData.Id(2) && a.Visible);
+    }
+
+    // ------------------------------------------------------------------
+    // 拖出分组（就地拆分）
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 就地拆分不还原窗口位置()
+    {
+        var (manager, groupId) = TestData.GroupOf(3);
+
+        var result = manager.DetachTabInPlace(groupId, TestData.Id(2));
+
+        // 用户刚刚亲手把窗口拖到了想要的地方，再按快照弹回旧位置是在跟用户较劲。
+        Assert.True(result.Success);
+        Assert.DoesNotContain(
+            result.Actions.OfType<RestoreWindowAction>(),
+            a => a.Target == TestData.Id(2));
+    }
+
+    [Fact]
+    public void 就地拆分仍还原任务栏按钮与圆角()
+    {
+        var (manager, groupId) = TestData.GroupOf(3);
+
+        var result = manager.DetachTabInPlace(groupId, TestData.Id(2));
+
+        // 任务栏按钮可能被策略隐藏过，圆角在分组期间被改成了直角，两者都必须改回来。
+        Assert.Contains(
+            result.Actions.OfType<SetTaskbarButtonAction>(),
+            a => a.Target == TestData.Id(2) && a.Visible);
+        Assert.Contains(
+            result.Actions.OfType<RestoreWindowCornersAction>(),
+            a => a.Target == TestData.Id(2));
+    }
+
+    [Fact]
+    public void 就地拆分后标签从组中移除()
+    {
+        var (manager, groupId) = TestData.GroupOf(3);
+
+        manager.DetachTabInPlace(groupId, TestData.Id(2));
+
+        // 窗口已被拖走独立存在，标签却还留在分组栏里，就是用户说的"割裂感"。
+        Assert.Null(manager.FindGroup(groupId)!.FindTab(TestData.Id(2)));
+        Assert.False(manager.IsGrouped(TestData.Id(2)));
+    }
+
+    // ------------------------------------------------------------------
+    // 拖动整组
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 更新组矩形后再次读取生效()
+    {
+        var (manager, groupId) = TestData.GroupOf(2);
+        var moved = PixelRect.FromSize(500, 400, 800, 600);
+
+        manager.SetGroupBounds(groupId, moved);
+
+        // 不写回的话，下一次鼠标移动仍从旧矩形算起，窗口被反复拉回原处 ——
+        // 表现为"拖不动、像被锁定了"。
+        Assert.Equal(moved, manager.FindGroup(groupId)!.Bounds);
+    }
+
+    [Fact]
+    public void 连续移动组时位移正确累加()
+    {
+        var (manager, groupId) = TestData.GroupOf(2);
+        var start = manager.FindGroup(groupId)!.Bounds;
+
+        for (var i = 0; i < 5; i++)
+        {
+            var current = manager.FindGroup(groupId)!.Bounds;
+            manager.SetGroupBounds(groupId, current.OffsetBy(10, 5));
+        }
+
+        var final = manager.FindGroup(groupId)!.Bounds;
+        Assert.Equal(start.Left + 50, final.Left);
+        Assert.Equal(start.Top + 25, final.Top);
     }
 
     [Fact]

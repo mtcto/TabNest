@@ -81,10 +81,26 @@ public sealed class TabRailLayoutTests
     [Fact]
     public void 标签宽度不低于最小值()
     {
-        // 20 个标签远超轨道宽度。宁可溢出也不能压到无法显示标题。
+        // 20 个标签远超轨道宽度。宁可放不下也不能压到无法显示标题。
         var layout = Layout(20);
 
         Assert.All(layout.Tabs, t => Assert.True(t.Bounds.Width >= Metrics.MinTabWidth));
+    }
+
+    [Fact]
+    public void 放不下的标签被计入溢出数量()
+    {
+        var layout = Layout(20);
+
+        // 静默丢弃会让用户以为标签没了，必须能被 UI 提示出来。
+        Assert.True(layout.HiddenTabCount > 0);
+        Assert.Equal(20, layout.Tabs.Count + layout.HiddenTabCount);
+    }
+
+    [Fact]
+    public void 标签放得下时溢出数量为零()
+    {
+        Assert.Equal(0, Layout(3).HiddenTabCount);
     }
 
     [Fact]
@@ -267,5 +283,167 @@ public sealed class TabRailLayoutTests
 
         Assert.Empty(layout.Tabs);
         Assert.Equal(Anchor.Top, layout.Bounds.Bottom);
+    }
+
+    // ------------------------------------------------------------------
+    // 关闭整组按钮
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 关闭整组按钮位于右侧()
+    {
+        var layout = Layout(3);
+
+        Assert.True(layout.CloseGroupButton.Width > 0);
+        Assert.True(layout.CloseGroupButton.Right <= layout.Bounds.Width);
+        Assert.True(layout.CloseGroupButton.Left > layout.Tabs[^1].Bounds.Left);
+    }
+
+    [Fact]
+    public void 标签不会与关闭整组按钮重叠()
+    {
+        // 20 个标签的极端情况下，标签仍不得盖住关闭整组按钮 ——
+        // 被盖住就等于用户再也关不掉这个组。
+        var layout = Layout(20);
+
+        Assert.All(
+            layout.Tabs,
+            t => Assert.True(
+                t.Bounds.Right <= layout.CloseGroupButton.Left,
+                $"标签右边界 {t.Bounds.Right} 越过了关闭按钮左边界 {layout.CloseGroupButton.Left}"));
+    }
+
+    // ------------------------------------------------------------------
+    // 拖动区域
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 标签上不是拖动区()
+    {
+        var layout = Layout(3);
+
+        Assert.False(layout.IsDragArea(layout.Tabs[0].Bounds.Center));
+    }
+
+    [Fact]
+    public void 菜单按钮上不是拖动区()
+    {
+        var layout = Layout(3);
+
+        Assert.False(layout.IsDragArea(layout.MenuButton.Center));
+    }
+
+    [Fact]
+    public void 关闭整组按钮上不是拖动区()
+    {
+        var layout = Layout(3);
+
+        Assert.False(layout.IsDragArea(layout.CloseGroupButton.Center));
+    }
+
+    [Fact]
+    public void 标签之后的空白是拖动区()
+    {
+        var layout = Layout(2);
+        var gap = new PixelPoint(
+            layout.Tabs[^1].Bounds.Right + 10,
+            layout.Bounds.Height / 2);
+
+        Assert.True(layout.IsDragArea(gap));
+    }
+
+    // ------------------------------------------------------------------
+    // 圆角跟随承载窗口
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 圆角半径原样透传不被DPI二次缩放()
+    {
+        // 半径由调用方按承载窗口实测得出，已是物理像素。
+        // 若在 ScaleTo 里再缩放一次，高 DPI 下圆角会大得离谱。
+        var metrics = (Metrics with { TopCornerRadius = 11 }).ScaleTo(144);
+
+        Assert.Equal(11, metrics.TopCornerRadius);
+    }
+
+    [Fact]
+    public void 方角窗口对应零圆角()
+    {
+        var metrics = Metrics with { TopCornerRadius = 0 };
+        var layout = TabRailLayoutEngine.Compute(Tabs(2), TestData.Id(1), Anchor, metrics);
+
+        Assert.Equal(0, layout.TopCornerRadius);
+    }
+
+    [Fact]
+    public void 圆角半径传递到布局结果()
+    {
+        var metrics = Metrics with { TopCornerRadius = 8 };
+        var layout = TabRailLayoutEngine.Compute(Tabs(2), TestData.Id(1), Anchor, metrics);
+
+        Assert.Equal(8, layout.TopCornerRadius);
+    }
+
+    [Fact]
+    public void 圆角窗口上分组栏向下覆盖圆角区域()
+    {
+        var metrics = Metrics with { TopCornerRadius = 8 };
+        var layout = TabRailLayoutEngine.Compute(Tabs(2), TestData.Id(1), Anchor, metrics);
+
+        // 只做到底边贴着窗口顶边是不够的：窗口自己的圆角会在分组栏正下方
+        // 透出后面的桌面，看起来就是"没接上"。必须向下压住这段圆角区域。
+        Assert.Equal(Anchor.Top + 8, layout.Bounds.Bottom);
+    }
+
+    [Fact]
+    public void 方角窗口上分组栏不额外覆盖()
+    {
+        var layout = TabRailLayoutEngine.Compute(
+            Tabs(2), TestData.Id(1), Anchor, Metrics with { TopCornerRadius = 0 });
+
+        // 窗口本来就是方角，没有缺口要盖，多覆盖只会白白遮住内容。
+        Assert.Equal(Anchor.Top, layout.Bounds.Bottom);
+    }
+
+    [Fact]
+    public void 分组栏始终与窗口同宽()
+    {
+        // 用户改变窗口宽度时分组栏必须跟着变，否则一眼就能看出是两个东西。
+        foreach (var width in (int[])[400, 900, 1600, 2560])
+        {
+            var anchor = PixelRect.FromSize(100, 200, width, 700);
+            var layout = TabRailLayoutEngine.Compute(Tabs(3), TestData.Id(1), anchor, Metrics);
+
+            Assert.Equal(anchor.Left, layout.Bounds.Left);
+            Assert.Equal(anchor.Right, layout.Bounds.Right);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 与窗口无缝衔接
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 轨道与窗口之间没有间隙()
+    {
+        var layout = Layout(3);
+
+        // 差一个像素就会露出一条缝。
+        Assert.Equal(Anchor.Top, layout.Bounds.Bottom);
+    }
+
+    [Theory]
+    [InlineData(96)]
+    [InlineData(120)]
+    [InlineData(144)]
+    [InlineData(192)]
+    public void 各DPI下轨道都紧贴窗口且左右对齐(int dpi)
+    {
+        var layout = TabRailLayoutEngine.Compute(
+            Tabs(3), TestData.Id(1), Anchor, Metrics.ScaleTo(dpi));
+
+        Assert.Equal(Anchor.Top, layout.Bounds.Bottom);
+        Assert.Equal(Anchor.Left, layout.Bounds.Left);
+        Assert.Equal(Anchor.Right, layout.Bounds.Right);
     }
 }

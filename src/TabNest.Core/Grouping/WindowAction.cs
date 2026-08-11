@@ -44,3 +44,11 @@ public sealed record SetTaskbarButtonAction(WindowIdentity Target, bool Visible)
 
 /// <summary>请求关闭窗口（发送 WM_CLOSE）。应用有权拒绝或弹出保存提示，这是预期行为。</summary>
 public sealed record CloseWindowAction(WindowIdentity Target) : WindowAction(Target);
+
+/// <summary>
+/// 还原窗口的系统圆角。
+///
+/// 分组期间成员窗口顶部被改为直角，以便与上方的分组条拼成一体。
+/// 窗口离开组时必须改回去，否则它会一直保持方角，与系统里其他窗口格格不入。
+/// </summary>
+public sealed record RestoreWindowCornersAction(WindowIdentity Target) : WindowAction(Target);

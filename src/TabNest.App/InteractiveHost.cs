@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using TabNest.Core.Diagnostics;
 using TabNest.Core.Models;
 using TabNest.Interop;
 
@@ -40,27 +41,54 @@ internal sealed class InteractiveHost : IDisposable
 
     public static int Run()
     {
+        AppPaths.EnsureCreated();
+        FileLog.Initialize(AppPaths.LogDirectory);
+
         // 单实例：两个 TabNest 同时管理窗口会互相争抢焦点和位置，
         // 后果是用户窗口在两者之间来回跳。
         using var singleInstance = new Mutex(true, @"Local\TabNest.SingleInstance", out var isFirst);
 
         if (!isFirst)
         {
+            FileLog.Warn("已有实例在运行，本次启动退出。");
             Console.Error.WriteLine("TabNest 已在运行。");
             return 1;
         }
 
-        using var host = new InteractiveHost();
-        host.Start();
+        // 未捕获异常必须落盘。否则进程一声不响地消失，事后完全无法判断原因 ——
+        // 这正是上一次退出无从追查的教训。
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            FileLog.Error("未捕获异常导致进程终止。", e.ExceptionObject as Exception);
 
-        UiDispatcher.RunMessageLoop();
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            FileLog.Error("后台任务异常未被观察。", e.Exception);
+            e.SetObserved();
+        };
 
-        return 0;
+        try
+        {
+            using var host = new InteractiveHost();
+            host.Start();
+
+            UiDispatcher.RunMessageLoop();
+
+            FileLog.Info("消息循环结束，正常退出。");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            FileLog.Error("启动或运行期间发生异常。", ex);
+            throw;
+        }
     }
 
     private void Start()
     {
-        Debug.WriteLine($"[TabNest] 已启动，数据目录 {AppPaths.Root}");
+        FileLog.Info(
+            $"TabNest {BuildInfo.DisplayVersion} 已启动"
+            + $"（PID {Environment.ProcessId}，数据目录 {AppPaths.Root}）。");
+
         UpdateTrayTooltip();
     }
 
@@ -71,7 +99,13 @@ internal sealed class InteractiveHost : IDisposable
 
         return
         [
-            new TrayMenuItem(MenuToggleEnabled, "启用 TabNest", Checked: settings.Enabled),
+            // 标签直接写出点击后的动作，而不是写状态名。
+            // 早期写作"启用 TabNest"配一个勾选标记，用户在已启用时点它以为是"确认启用"，
+            // 实际是取消勾选把产品停掉了 —— 而且停用后所有拖拽都被静默拒绝，非常难察觉。
+            new TrayMenuItem(
+                MenuToggleEnabled,
+                settings.Enabled ? "停用 TabNest（暂停接管窗口）" : "启用 TabNest",
+                Checked: settings.Enabled),
             TrayMenuItem.Separator,
 
             new TrayMenuItem(
@@ -154,6 +188,7 @@ internal sealed class InteractiveHost : IDisposable
     /// </summary>
     private void RequestExit()
     {
+        FileLog.Info("用户从托盘菜单请求退出。");
         _orchestrator.DissolveEverything();
         _dispatcher.RequestShutdown();
     }
