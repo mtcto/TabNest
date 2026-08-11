@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RootNamespace>TabNest.App</RootNamespace>
+    <AssemblyName>TabNest</AssemblyName>
+    <OutputType>WinExe</OutputType>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <!--
+    UseWPF 只是引入引用与 XAML 编译能力，不会让 WPF 程序集在启动时加载 ——
+    .NET 按需加载程序集，只要常驻代码路径不触碰 WPF 类型，PresentationFramework 就不进内存。
+
+    EnableDefaultApplicationDefinition=false 是这条约束的关键：
+    禁止 SDK 自动把 App.xaml 变成入口点，否则进程一启动就初始化 WPF Application，
+    常驻内存目标（≤60MB）直接作废。入口点是我们自己的 Program.Main。
+  -->
+  <PropertyGroup>
+    <UseWPF>true</UseWPF>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <StartupObject>TabNest.App.Program</StartupObject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TabNest.Core\TabNest.Core.csproj" />
+    <ProjectReference Include="..\TabNest.Interop\TabNest.Interop.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Vortice.Direct2D1" />
+    <PackageReference Include="Vortice.DXGI" />
+    <PackageReference Include="WPF-UI" />
+  </ItemGroup>
+
+</Project>

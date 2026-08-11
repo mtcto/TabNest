@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    可重复的窗口行为测试宿主。开发工具，不随产品发布。
+    这里可以自由使用 WPF —— 常驻内存约束只针对 TabNest.App。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RootNamespace>TabNest.Harness</RootNamespace>
+    <AssemblyName>TabNest.Harness</AssemblyName>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

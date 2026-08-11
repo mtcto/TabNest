@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    纯领域层：零 Win32、零 UI 依赖、零平台绑定。
+    所有逻辑必须可在无窗口环境下单元测试。
+    标签轨道的布局计算也放在这里 —— 阶段二移植到 C++ 渲染器时可近乎逐行翻译。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>TabNest.Core</RootNamespace>
+  </PropertyGroup>
+
+</Project>

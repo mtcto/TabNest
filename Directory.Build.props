@@ -1,0 +1,44 @@
+<Project>
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+
+    <!-- TabNest 只面向 Windows，关掉不需要的全球化数据以压缩常驻内存 -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+
+    <!-- 性能：常驻托盘进程用工作站 GC，避免 ServerGC 的多堆内存开销 -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+
+    <!-- P/Invoke 必须走源生成的 LibraryImport -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <Company>TabNest</Company>
+    <Product>TabNest</Product>
+    <Copyright>Copyright (c) 2026 TabNest Contributors</Copyright>
+    <Version>0.1.0</Version>
+    <NeutralLanguage>zh-CN</NeutralLanguage>
+
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!--
+      刻意不豁免 CA1416（平台兼容性）：TFM 已精确到 net10.0-windows10.0.19041.0，
+      调用更高版本 API 时必须报错，由我们显式做 OS 版本判定后再降级，
+      而不是靠全局豁免把问题藏起来。
+    -->
+    <NoWarn>$(NoWarn)</NoWarn>
+  </PropertyGroup>
+
+  <!-- 测试项目放宽：断言与测试数据不适用生产级分析规则 -->
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('.Tests'))">
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

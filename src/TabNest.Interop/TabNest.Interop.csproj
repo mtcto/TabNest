@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    所有 P/Invoke、句柄、回调、结构体集中于此。
+    禁止在此项目外声明任何 [LibraryImport]。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RootNamespace>TabNest.Interop</RootNamespace>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TabNest.Core\TabNest.Core.csproj" />
+  </ItemGroup>
+
+</Project>
