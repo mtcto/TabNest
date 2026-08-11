@@ -385,24 +385,17 @@ public sealed class TabRailLayoutTests
     }
 
     [Fact]
-    public void 圆角窗口上分组栏向下覆盖圆角区域()
+    public void 分组栏底边严格等于窗口顶边()
     {
-        var metrics = Metrics with { TopCornerRadius = 8 };
-        var layout = TabRailLayoutEngine.Compute(Tabs(2), TestData.Id(1), Anchor, metrics);
+        // 曾经让分组栏向下多覆盖一段（等于窗口圆角半径）以填补圆角处的缺口，
+        // 但那会实实在在遮住窗口顶部内容，得不偿失。
+        foreach (var radius in (int[])[0, 4, 8, 12])
+        {
+            var layout = TabRailLayoutEngine.Compute(
+                Tabs(2), TestData.Id(1), Anchor, Metrics with { TopCornerRadius = radius });
 
-        // 只做到底边贴着窗口顶边是不够的：窗口自己的圆角会在分组栏正下方
-        // 透出后面的桌面，看起来就是"没接上"。必须向下压住这段圆角区域。
-        Assert.Equal(Anchor.Top + 8, layout.Bounds.Bottom);
-    }
-
-    [Fact]
-    public void 方角窗口上分组栏不额外覆盖()
-    {
-        var layout = TabRailLayoutEngine.Compute(
-            Tabs(2), TestData.Id(1), Anchor, Metrics with { TopCornerRadius = 0 });
-
-        // 窗口本来就是方角，没有缺口要盖，多覆盖只会白白遮住内容。
-        Assert.Equal(Anchor.Top, layout.Bounds.Bottom);
+            Assert.Equal(Anchor.Top, layout.Bounds.Bottom);
+        }
     }
 
     [Fact]

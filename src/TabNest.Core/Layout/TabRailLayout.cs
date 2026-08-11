@@ -182,18 +182,16 @@ public static class TabRailLayoutEngine
         ArgumentNullException.ThrowIfNull(tabs);
         ArgumentNullException.ThrowIfNull(metrics);
 
-        // 轨道与窗口同宽，并向下**多覆盖**一段，盖住窗口顶部两个圆角。
+        // 分组条与窗口同宽，底边**严格等于**窗口顶边。
         //
-        // 只做到"底边贴着窗口顶边"是不够的：窗口自己的圆角会在分组条正下方
-        // 透出后面的桌面，看起来就是没接上。向下压住这段圆角区域即可消除接缝，
-        // 而且不必去改用户窗口的外观 —— 窗口原本是圆角就该保持圆角。
-        var overlap = metrics.TopCornerRadius;
-
+        // 曾经让它向下多覆盖一段（等于窗口圆角半径）以填补圆角处的缺口，
+        // 但那会实实在在遮住窗口顶部的内容，得不偿失 ——
+        // 圆角处那两个几像素的缺口远不如挡住内容来得刺眼。
         var railBounds = new PixelRect(
             anchorBounds.Left,
             anchorBounds.Top - metrics.Height,
             anchorBounds.Right,
-            anchorBounds.Top + overlap);
+            anchorBounds.Top);
 
         var menuWidth = showMenuButton ? metrics.MenuButtonWidth : 0;
         var menuButton = menuWidth > 0

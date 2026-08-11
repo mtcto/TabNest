@@ -60,6 +60,21 @@ internal static class RailTestCommand
                 anchor.Bounds.Right,
                 anchor.Bounds.Bottom);
 
+            // 真正把窗口挪到内容区。
+            //
+            // 早期这里只造分组栏而不动窗口，于是窗口仍然压在分组栏所在的位置上，
+            // 测试场景与实际分组完全不符 —— 这种"看起来在测、其实测的是别的东西"
+            // 的测试比没有测试更有害。
+            using (var controller = new WindowController())
+            {
+                controller
+                    .ExecuteAsync(new Core.Grouping.AlignWindowAction(anchor.Identity, content))
+                    .GetAwaiter()
+                    .GetResult();
+            }
+
+            Thread.Sleep(200);
+
             var tabs = new List<TabItem>
             {
                 MakeTab(anchor, active: true),
@@ -75,7 +90,7 @@ internal static class RailTestCommand
                     Layout = layout,
                     Tabs = tabs,
                     ActiveIdentity = tabs[0].Identity,
-                    Theme = RailTheme.Dark,
+                    Theme = RailTheme.Default,
                     Dpi = dpi,
                 },
                 anchor.Identity.Handle);
@@ -103,21 +118,23 @@ internal static class RailTestCommand
             var railZ = ZOrderIndex(rail.Handle);
             var anchorZ = ZOrderIndex(anchor.Identity.Handle);
 
+            // 分组栏刻意排在承载窗口**之下**：它向下多延伸的一段因此被窗口挡住，
+            // 而窗口圆角的缺口处透出分组栏的颜色 —— 接缝消失且不遮挡窗口内容。
             failures += Check(
-                "轨道在承载窗口之上",
-                railZ >= 0 && anchorZ >= 0 && railZ < anchorZ,
-                $"轨道 Z 序位置 {railZ}，承载窗口 {anchorZ}（数值越小越靠前）");
+                "轨道紧邻承载窗口之下",
+                railZ >= 0 && anchorZ >= 0 && railZ == anchorZ + 1,
+                $"轨道 Z 序位置 {railZ}，承载窗口 {anchorZ}（应为承载窗口 + 1）");
 
-            // 最关键的一条：轨道中心点上做命中测试，必须能打到轨道自己。
-            // 打不到就说明它被别的窗口盖住了，用户根本看不见。
-            var center = new PixelPoint(
+            // 标签区域位于窗口顶边之上，必须没有被任何东西盖住 ——
+            // 排在窗口之下不等于可以被遮挡，这两件事必须分别验证。
+            var tabAreaCenter = new PixelPoint(
                 rail.ActualBounds.Left + (rail.ActualBounds.Width / 2),
-                rail.ActualBounds.Top + (rail.ActualBounds.Height / 2));
+                rail.ActualBounds.Top + (metrics.Height / 2));
 
-            var hit = WindowEnumerator.TopLevelWindowAt(center);
+            var hit = WindowEnumerator.TopLevelWindowAt(tabAreaCenter);
 
             failures += Check(
-                "轨道中心可被命中（未被遮挡）",
+                "标签区域可被命中（未被遮挡）",
                 hit == rail.Handle,
                 $"命中的是 0x{hit:X}，期望轨道 0x{rail.Handle:X}");
         }

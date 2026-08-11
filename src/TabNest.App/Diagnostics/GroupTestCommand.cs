@@ -91,22 +91,12 @@ internal static class GroupTestCommand
             rail.ActualBounds.Top >= 0 && !rail.ActualBounds.IsEmpty,
             $"轨道矩形 {rail.ActualBounds}");
 
-        // 分组栏底边必须至少到达组矩形顶边，圆角窗口还要再向下压住圆角区域。
-        // 差一像素就会露缝；覆盖过多则会白白遮住窗口内容。
-        var cornerRadius = WindowEnumerator.TopCornerRadius(
-            group.ActiveTab!.Identity.Handle,
-            MonitorLookup.DpiForWindow(group.ActiveTab.Identity.Handle));
-
+        // 分组栏底边必须**严格等于**窗口顶边：差一像素露缝，多一像素就遮住窗口内容。
         failures += Check(
-            "分组栏与窗口之间无缝隙",
-            rail.ActualBounds.Bottom >= group.Bounds.Top,
-            $"轨道底边 {rail.ActualBounds.Bottom} 未达到组顶边 {group.Bounds.Top}");
-
-        failures += Check(
-            "分组栏覆盖窗口圆角区域",
-            rail.ActualBounds.Bottom == group.Bounds.Top + cornerRadius,
-            $"轨道底边 {rail.ActualBounds.Bottom}，期望 {group.Bounds.Top + cornerRadius}"
-            + $"（组顶边 {group.Bounds.Top} + 圆角 {cornerRadius}）");
+            "分组栏底边与窗口顶边严格贴合",
+            rail.ActualBounds.Bottom == group.Bounds.Top,
+            $"轨道底边 {rail.ActualBounds.Bottom}，窗口顶边 {group.Bounds.Top}，"
+            + $"相差 {rail.ActualBounds.Bottom - group.Bounds.Top} 像素");
 
         failures += Check(
             "分组栏与窗口同宽",

@@ -94,7 +94,9 @@ internal sealed class TabRailWindow : Win32Window
         // 在文档上就不受支持，失败时也不保证设置错误码，会出现"报告成功但什么都没做"。
         // 那样轨道就是一个普通窗口，静静待在成员窗口后面被完全盖住 ——
         // 表现正是"分组成功了但看不到分组栏"。
-        if (ownerHwnd != _owner && ownerHwnd != 0)
+        var ownerChanged = ownerHwnd != _owner && ownerHwnd != 0;
+
+        if (ownerChanged)
         {
             _owner = ownerHwnd;
             SetOwner(ownerHwnd);
@@ -102,8 +104,15 @@ internal sealed class TabRailWindow : Win32Window
 
         SetBounds(state.Layout.Bounds);
 
-        // 因此每次更新都显式把轨道抬到成员窗口正上方。这一步是可见性的唯一保证。
-        PlaceAbove(_owner);
+        // Z 序**只在属主变化时**维护，不在每次位置更新时做。
+        //
+        // 拖动窗口时这个方法每秒被调用几十次，每次都调一遍 SetWindowPos 调整 Z 序
+        // 是拖动卡顿的主要来源 —— 而位置变化根本不需要动 Z 序。
+        // 前台切换导致的层级变动由 RestackAboveOwner 单独处理。
+        if (ownerChanged)
+        {
+            PlaceBelow(_owner);
+        }
 
         // 尺寸或圆角变化后才重设区域：SetWindowRgn 会触发重绘，每帧都调用会闪。
         var bounds = state.Layout.Bounds;
@@ -120,12 +129,12 @@ internal sealed class TabRailWindow : Win32Window
         Invalidate();
     }
 
-    /// <summary>把轨道重新贴到属主窗口正上方。属主的 Z 序变化后调用。</summary>
+    /// <summary>把轨道重新贴到属主窗口正下方。属主的 Z 序变化后调用。</summary>
     public void RestackAboveOwner()
     {
         if (_owner != 0)
         {
-            PlaceAbove(_owner);
+            PlaceBelow(_owner);
         }
     }
 

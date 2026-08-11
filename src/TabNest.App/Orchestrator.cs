@@ -256,6 +256,9 @@ internal sealed class Orchestrator : IDisposable
     /// <summary>是否已有一批对齐指令在执行中。用于拖动时丢弃过期的中间帧。</summary>
     private int _alignInFlight;
 
+    /// <summary>窗口圆角半径缓存。避免拖动时每帧查询 DWM 属性。</summary>
+    private readonly Dictionary<nint, int> _cornerRadiusCache = [];
+
     private static bool Near(PixelRect a, PixelRect b, int tolerance) =>
         Math.Abs(a.Left - b.Left) <= tolerance
         && Math.Abs(a.Top - b.Top) <= tolerance
@@ -896,9 +899,14 @@ internal sealed class Orchestrator : IDisposable
             return;
         }
 
-        var anchor = group.Bounds.IsEmpty
-            ? WindowEnumerator.ReadVisibleBounds(active.Identity.Handle)
-            : group.Bounds;
+        // 以**活动窗口的实际可见边框**为准，而不是组模型里记录的矩形。
+        //
+        // 两者理论上应该一致，但窗口对齐是异步的，且不同应用对 SetWindowPos 的
+        // 实际响应会有细微出入（最小尺寸限制、自绘边框、DPI 舍入）。
+        // 用组矩形会让分组栏比窗口宽出一点点，一眼就能看出是两个东西。
+        // 跟着真实窗口走才能严丝合缝。
+        var actual = WindowEnumerator.ReadVisibleBounds(active.Identity.Handle);
+        var anchor = actual.IsEmpty ? group.Bounds : actual;
 
         if (anchor.IsEmpty)
         {
@@ -909,12 +917,17 @@ internal sealed class Orchestrator : IDisposable
         var dpi = MonitorLookup.DpiForWindow(active.Identity.Handle);
 
         // 圆角跟随承载窗口实测值，不写死：Windows 10 无窗口圆角，
-        // Windows 11 上应用也可声明直角，最大化窗口同样是直角。
-        // 写死圆角会在方角窗口上方露出两个缺口。
-        var metrics = new RailMetrics().ScaleTo(dpi) with
+        // Windows 11 上应用也可声明直角。写死会在方角窗口上方露出两个缺口。
+        //
+        // 结果按窗口缓存：拖动时这里每秒被调用几十次，每次查一遍 DWM 属性
+        // 是拖动卡顿的来源之一，而圆角偏好在窗口生命周期内基本不变。
+        if (!_cornerRadiusCache.TryGetValue(active.Identity.Handle, out var cornerRadius))
         {
-            TopCornerRadius = WindowEnumerator.TopCornerRadius(active.Identity.Handle, dpi),
-        };
+            cornerRadius = WindowEnumerator.TopCornerRadius(active.Identity.Handle, dpi);
+            _cornerRadiusCache[active.Identity.Handle] = cornerRadius;
+        }
+
+        var metrics = new RailMetrics().ScaleTo(dpi) with { TopCornerRadius = cornerRadius };
 
         var layout = TabRailLayoutEngine.Compute(
             group.Tabs,
@@ -932,7 +945,7 @@ internal sealed class Orchestrator : IDisposable
                 Layout = layout,
                 Tabs = group.Tabs,
                 ActiveIdentity = active.Identity,
-                Theme = RailTheme.Dark,
+                Theme = RailTheme.Default,
                 Dpi = dpi,
             },
             ownerHwnd: active.Identity.Handle);

@@ -247,6 +247,25 @@ public abstract class Win32Window : IDisposable
             User32.SWP_NOMOVE | User32.SWP_NOSIZE | User32.SWP_NOACTIVATE);
     }
 
+    /// <summary>
+    /// 把本窗口置于 Z 序中 <paramref name="target"/> 的正下方。
+    ///
+    /// 用于让分组栏藏在成员窗口之后：分组栏向下多延伸的一段会被窗口挡住，
+    /// 而窗口圆角的缺口处正好透出分组栏的颜色 —— 接缝消失，
+    /// 同时分组栏不会啃掉窗口的可见内容。
+    /// </summary>
+    public void PlaceBelow(nint target)
+    {
+        if (target == 0 || _hwnd == 0)
+        {
+            return;
+        }
+
+        User32.SetWindowPos(
+            _hwnd, target, 0, 0, 0, 0,
+            User32.SWP_NOMOVE | User32.SWP_NOSIZE | User32.SWP_NOACTIVATE);
+    }
+
     public void HideWindow() => User32.ShowWindow(_hwnd, User32.SW_HIDE);
 
     /// <summary>

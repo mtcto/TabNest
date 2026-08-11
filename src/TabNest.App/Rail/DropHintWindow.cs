@@ -95,7 +95,7 @@ internal sealed class DropHintWindow : Win32Window
             return;
         }
 
-        var theme = RailTheme.Dark;
+        var theme = RailTheme.Default;
         var background = _isBlocked ? 0xFF7A2E2E : theme.ActiveTabBackground;
         var foreground = _isBlocked ? 0xFFFFD0D0 : theme.ActiveText;
 

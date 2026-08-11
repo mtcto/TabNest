@@ -362,10 +362,13 @@ public sealed class WindowController : IDisposable
     /// </summary>
     private OperationResult AlignTo(nint hwnd, PixelRect target, Stopwatch stopwatch)
     {
-        if (User32.IsHungAppWindow(hwnd))
-        {
-            return OperationResult.Fail("目标窗口无响应，已跳过对齐。");
-        }
+        // 这里刻意**不**做 IsHungAppWindow 预检。
+        //
+        // 对齐已改为异步投递（见下方 SWP_ASYNCWINDOWPOS），向繁忙窗口投递请求是无害的，
+        // 它恢复后自然会处理。而预检会让应用每一次短暂繁忙（GC、重绘、后台索引）
+        // 都使该成员整个停止跟随，拖动时表现为窗口时断时续地掉队。
+        //
+        // 激活操作仍然保留预检 —— 那里需要同步确认焦点是否真的转移了。
 
         // 最大化的窗口无法被 SetWindowPos 定位，必须先还原成普通状态。
         //
@@ -408,9 +411,21 @@ public sealed class WindowController : IDisposable
         var width = target.Width + padLeft + padRight;
         var height = target.Height + padTop + padBottom;
 
+        // SWP_ASYNCWINDOWPOS 是这里的关键。
+        //
+        // 对**其他进程**的窗口调用 SetWindowPos 默认是同步的：它把
+        // WM_WINDOWPOSCHANGING/CHANGED 发给目标窗口的线程，并一直等到对方处理完。
+        // 目标应用的 UI 线程只要在忙（Java 应用的 GC、IDE 的后台索引、重绘），
+        // 我们的控制队列就被一起卡住，实测能停两秒。
+        //
+        // 后果是拖动时中间帧全被丢弃：分组栏还在跟手，成员窗口却停在原地，
+        // 等对齐终于返回又整体跳回来 —— 就是"经过其他窗口就卡住、分组栏和窗口分离"。
+        //
+        // 异步版本只投递请求不等待，窗口位置的正确性由后续帧保证。
         var ok = User32.SetWindowPos(
             hwnd, 0, x, y, width, height,
-            User32.SWP_NOZORDER | User32.SWP_NOACTIVATE | User32.SWP_NOOWNERZORDER);
+            User32.SWP_NOZORDER | User32.SWP_NOACTIVATE | User32.SWP_NOOWNERZORDER
+            | User32.SWP_ASYNCWINDOWPOS);
 
         // 刻意**不**修改目标窗口的圆角偏好。
         //
@@ -446,9 +461,11 @@ public sealed class WindowController : IDisposable
 
     private static OperationResult Lower(nint hwnd, Stopwatch stopwatch)
     {
+        // 同 AlignTo：跨进程的 SetWindowPos 默认同步等待目标线程，必须异步化。
         var ok = User32.SetWindowPos(
             hwnd, User32.HWND_BOTTOM, 0, 0, 0, 0,
-            User32.SWP_NOMOVE | User32.SWP_NOSIZE | User32.SWP_NOACTIVATE | User32.SWP_NOOWNERZORDER);
+            User32.SWP_NOMOVE | User32.SWP_NOSIZE | User32.SWP_NOACTIVATE
+            | User32.SWP_NOOWNERZORDER | User32.SWP_ASYNCWINDOWPOS);
 
         return ok
             ? Done(ActivationLevel.NotAttempted, stopwatch)
