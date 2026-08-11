@@ -1,0 +1,308 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading.Channels;
+using TabNest.Interop.Native;
+
+namespace TabNest.Interop;
+
+/// <summary>
+/// 观察系统窗口事件。
+///
+/// 设计要点：
+///
+/// **零轮询。** 全部依赖 <c>SetWinEventHook</c> 的被动投递。Groupy 空闲 CPU 只有 0.08% 单核，
+/// 正是因为 hook 是被动的；任何定时轮询都会让我们输掉这个指标。
+///
+/// **回调用 <c>[UnmanagedCallersOnly]</c> 静态函数指针。** 传统做法是持有一个托管委托字段防止
+/// GC 回收，一旦忘记就会在运行数小时后随机崩溃 —— 这是 WinEvent 最经典的坑。
+/// 用函数指针从根本上不存在这个问题。
+///
+/// **观察线程只投递，不做业务。** 回调里禁止阻塞 IO、进程查询和 UI 操作：
+/// WinEvent 回调运行在被观察窗口的消息投递路径上，拖慢它会影响整个系统的响应。
+/// </summary>
+public sealed class WinEventObserver : IDisposable
+{
+    /// <summary>位置变化事件的合并窗口。拖拽一个窗口每秒能产生上百个事件，不合并会淹没队列。</summary>
+    private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMilliseconds(16);
+
+    /// <summary>队列上限。满了丢弃最旧的位置事件而非无限增长 —— 计划书要求事件风暴不得让队列无限增长。</summary>
+    private const int QueueCapacity = 2048;
+
+    /// <summary>
+    /// 当前实例。<c>[UnmanagedCallersOnly]</c> 回调必须是静态的，只能通过静态字段找回实例。
+    /// TabNest 全进程只有一个观察者，这个约束不构成限制。
+    /// </summary>
+    private static WinEventObserver? _current;
+
+    private readonly Channel<WindowEvent> _channel;
+
+    /// <summary>位置变化的待合并暂存。键是窗口句柄，只保留最新一次。</summary>
+    private readonly ConcurrentDictionary<nint, long> _pendingLocation = new();
+
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly Thread _thread;
+    private readonly List<nint> _hooks = [];
+    private uint _threadId;
+    private volatile bool _disposed;
+
+    public WinEventObserver()
+    {
+        _channel = Channel.CreateBounded<WindowEvent>(new BoundedChannelOptions(QueueCapacity)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+            SingleWriter = false,
+        });
+
+        _current = this;
+
+        _thread = new Thread(Run)
+        {
+            Name = "TabNest.WinEventObserver",
+            IsBackground = true,
+        };
+        _thread.SetApartmentState(ApartmentState.STA);
+        _thread.Start();
+
+        _ = Task.Run(CoalesceLoop);
+    }
+
+    /// <summary>合并后的事件流。消费者应在自己的线程上读取，不要在 UI 线程同步等待。</summary>
+    public ChannelReader<WindowEvent> Events => _channel.Reader;
+
+    /// <summary>已丢弃的事件数。持续增长说明消费者跟不上，是性能问题的早期信号。</summary>
+    public long DroppedEvents => Interlocked.Read(ref _dropped);
+
+    private long _dropped;
+
+    // ------------------------------------------------------------------
+    // 观察线程
+    // ------------------------------------------------------------------
+
+    private unsafe void Run()
+    {
+        _threadId = Kernel32.GetCurrentThreadId();
+
+        // 分段注册而非一次覆盖 EVENT_MIN..EVENT_MAX：后者会收到海量无关事件
+        // （每一次焦点、光标、值变化），全部要跨进程投递到我们进程，白白消耗 CPU。
+        var callback = (nint)(delegate* unmanaged<nint, uint, nint, int, int, uint, uint, void>)&OnWinEvent;
+
+        Hook(User32.EVENT_SYSTEM_FOREGROUND, User32.EVENT_SYSTEM_FOREGROUND, callback);
+        Hook(User32.EVENT_SYSTEM_MOVESIZESTART, User32.EVENT_SYSTEM_MOVESIZEEND, callback);
+        Hook(User32.EVENT_SYSTEM_MINIMIZESTART, User32.EVENT_SYSTEM_MINIMIZEEND, callback);
+        Hook(User32.EVENT_OBJECT_DESTROY, User32.EVENT_OBJECT_HIDE, callback);
+        Hook(User32.EVENT_OBJECT_LOCATIONCHANGE, User32.EVENT_OBJECT_NAMECHANGE, callback);
+        Hook(User32.EVENT_OBJECT_CLOAKED, User32.EVENT_OBJECT_UNCLOAKED, callback);
+
+        if (_hooks.Count == 0)
+        {
+            Debug.WriteLine("[TabNest] 未能注册任何 WinEvent 钩子，窗口观察不可用。");
+            return;
+        }
+
+        PumpMessages();
+        Unhook();
+    }
+
+    private void Hook(uint min, uint max, nint callback)
+    {
+        var hook = User32.SetWinEventHook(
+            min, max,
+            hmodWinEventProc: 0,
+            pfnWinEventProc: callback,
+            idProcess: 0,
+            idThread: 0,
+            // OUTOFCONTEXT：不把我们的 DLL 注入到被观察进程里。
+            // SKIPOWNPROCESS：避免观察 TabNest 自己的窗口造成事件回环。
+            dwFlags: User32.WINEVENT_OUTOFCONTEXT | User32.WINEVENT_SKIPOWNPROCESS);
+
+        if (hook != 0)
+        {
+            _hooks.Add(hook);
+        }
+        else
+        {
+            Debug.WriteLine(
+                $"[TabNest] 注册 WinEvent 钩子 {min:X}-{max:X} 失败，"
+                + $"错误码 {Marshal.GetLastWin32Error()}。");
+        }
+    }
+
+    /// <summary>
+    /// 消息循环。
+    /// <c>SetWinEventHook</c> 的 OUTOFCONTEXT 模式要求调用线程有消息循环，
+    /// 否则回调永远不会被投递 —— 这是最容易漏掉、且症状为"完全没有事件"的一步。
+    /// </summary>
+    private void PumpMessages()
+    {
+        while (!_shutdown.IsCancellationRequested)
+        {
+            var result = User32.GetMessage(out var msg, 0, 0, 0);
+
+            if (result is 0 or -1)
+            {
+                break;
+            }
+
+            User32.TranslateMessage(ref msg);
+            User32.DispatchMessage(ref msg);
+        }
+    }
+
+    private void Unhook()
+    {
+        foreach (var hook in _hooks)
+        {
+            User32.UnhookWinEvent(hook);
+        }
+
+        _hooks.Clear();
+    }
+
+    // ------------------------------------------------------------------
+    // 回调
+    // ------------------------------------------------------------------
+
+    [UnmanagedCallersOnly]
+    private static void OnWinEvent(
+        nint hWinEventHook,
+        uint eventType,
+        nint hwnd,
+        int idObject,
+        int idChild,
+        uint dwEventThread,
+        uint dwmsEventTime)
+    {
+        // 只关心窗口本身的事件。控件、菜单项、光标都会以同样的事件类型上报，
+        // 不过滤会让事件量高出一两个数量级。
+        if (idObject != User32.OBJID_WINDOW || idChild != User32.CHILDID_SELF || hwnd == 0)
+        {
+            return;
+        }
+
+        var observer = _current;
+        if (observer is null || observer._disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            observer.Dispatch(eventType, hwnd);
+        }
+        catch (Exception ex)
+        {
+            // 异常绝不能穿出非托管回调边界 —— 那会直接终止进程。
+            Debug.WriteLine($"[TabNest] WinEvent 回调异常：{ex}");
+        }
+    }
+
+    private void Dispatch(uint eventType, nint hwnd)
+    {
+        var now = Stopwatch.GetTimestamp();
+
+        // 位置变化单独走合并路径：拖动一个窗口每秒可产生上百次，直接入队会挤掉其他事件。
+        if (eventType == User32.EVENT_OBJECT_LOCATIONCHANGE)
+        {
+            _pendingLocation[hwnd] = now;
+            return;
+        }
+
+        var kind = eventType switch
+        {
+            User32.EVENT_SYSTEM_FOREGROUND => WindowEventKind.Foreground,
+            User32.EVENT_SYSTEM_MOVESIZESTART => WindowEventKind.MoveSizeStart,
+            User32.EVENT_SYSTEM_MOVESIZEEND => WindowEventKind.MoveSizeEnd,
+            User32.EVENT_SYSTEM_MINIMIZESTART => WindowEventKind.MinimizeStart,
+            User32.EVENT_SYSTEM_MINIMIZEEND => WindowEventKind.MinimizeEnd,
+            User32.EVENT_OBJECT_DESTROY => WindowEventKind.Destroyed,
+            User32.EVENT_OBJECT_SHOW => WindowEventKind.Shown,
+            User32.EVENT_OBJECT_HIDE => WindowEventKind.Hidden,
+            User32.EVENT_OBJECT_NAMECHANGE => WindowEventKind.NameChanged,
+            User32.EVENT_OBJECT_CLOAKED => WindowEventKind.Cloaked,
+            User32.EVENT_OBJECT_UNCLOAKED => WindowEventKind.Uncloaked,
+            _ => (WindowEventKind?)null,
+        };
+
+        if (kind is null)
+        {
+            return;
+        }
+
+        Publish(new WindowEvent(kind.Value, hwnd, now));
+    }
+
+    private void Publish(WindowEvent evt)
+    {
+        if (!_channel.Writer.TryWrite(evt))
+        {
+            Interlocked.Increment(ref _dropped);
+        }
+    }
+
+    /// <summary>
+    /// 定期把合并后的位置变化事件投递出去。
+    ///
+    /// 这是唯一的定时器，周期 16ms（约一帧）。它只在有待处理位置事件时才做事，
+    /// 空闲时是一次字典判空，对空闲 CPU 的影响可以忽略。
+    /// </summary>
+    private async Task CoalesceLoop()
+    {
+        using var timer = new PeriodicTimer(CoalesceWindow);
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_shutdown.Token).ConfigureAwait(false))
+            {
+                if (_pendingLocation.IsEmpty)
+                {
+                    continue;
+                }
+
+                foreach (var hwnd in _pendingLocation.Keys)
+                {
+                    if (_pendingLocation.TryRemove(hwnd, out var timestamp))
+                    {
+                        Publish(new WindowEvent(WindowEventKind.LocationChanged, hwnd, timestamp));
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 正常关闭。
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _shutdown.Cancel();
+        _channel.Writer.TryComplete();
+
+        // 唤醒消息循环让它自然退出并注销钩子。
+        // 留下未注销的 WinEvent 钩子是计划书 G6 发布闸门明确禁止的。
+        if (_threadId != 0)
+        {
+            User32.PostThreadMessage(_threadId, User32.WM_QUIT, 0, 0);
+        }
+
+        if (!_thread.Join(TimeSpan.FromSeconds(3)))
+        {
+            Debug.WriteLine("[TabNest] 窗口观察线程未能在 3 秒内退出。");
+        }
+
+        _shutdown.Dispose();
+
+        if (ReferenceEquals(_current, this))
+        {
+            _current = null;
+        }
+    }
+}

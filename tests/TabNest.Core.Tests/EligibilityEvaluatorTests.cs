@@ -102,6 +102,18 @@ public sealed class EligibilityEvaluatorTests
     }
 
     [Fact]
+    public void 桌面窗口报告为Shell窗口而非工具窗口()
+    {
+        // 实测发现的问题：桌面（Progman）同时也是工具窗口，若工具窗检查排在前面，
+        // 就会报"这是工具窗口"—— 技术上没错，但对用户毫无帮助。更具体的原因必须优先。
+        var desktop = TestData.Window(1, title: "Program Manager", className: "Progman", toolWindow: true);
+
+        Assert.Equal(
+            IneligibleReason.ShellWindow,
+            EligibilityEvaluator.Evaluate(desktop, Context()).Reason);
+    }
+
+    [Fact]
     public void 过小的窗口被拒绝()
     {
         var window = TestData.Window(1, bounds: PixelRect.FromSize(0, 0, 40, 30));

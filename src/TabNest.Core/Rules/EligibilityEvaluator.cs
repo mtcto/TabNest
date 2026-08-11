@@ -121,6 +121,16 @@ public static class EligibilityEvaluator
                 "切换到该窗口所在的虚拟桌面，或先激活该应用再试。");
         }
 
+        // Shell 窗口的判定排在工具窗与无标题之前：桌面和任务栏同时也是工具窗口，
+        // 报"这是工具窗口"技术上没错但毫无帮助。更具体的原因优先。
+        if (ShellClassNames.Contains(window.ClassName))
+        {
+            return EligibilityResult.Block(
+                IneligibleReason.ShellWindow,
+                "这是 Windows 桌面自身的窗口（桌面、任务栏一类）。",
+                null);
+        }
+
         if (!window.HasUsableTitle)
         {
             return EligibilityResult.Block(
@@ -143,14 +153,6 @@ public static class EligibilityEvaluator
                 IneligibleReason.OwnedPopup,
                 "这是从属窗口，通常是对话框或浮层。把它从主窗口分离会破坏应用的交互逻辑。",
                 "请改为分组它的主窗口。");
-        }
-
-        if (ShellClassNames.Contains(window.ClassName))
-        {
-            return EligibilityResult.Block(
-                IneligibleReason.ShellWindow,
-                "这是 Windows 桌面自身的窗口（桌面、任务栏一类）。",
-                null);
         }
 
         if (window.Bounds.Width < context.MinimumWindowSize

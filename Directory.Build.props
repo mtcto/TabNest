@@ -8,9 +8,20 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
 
-    <!-- TabNest 只面向 Windows，关掉不需要的全球化数据以压缩常驻内存 -->
-    <InvariantGlobalization>true</InvariantGlobalization>
-    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <!--
+      InvariantGlobalization 必须保持 false。
+
+      曾为压缩常驻内存开启过，结果 WPF 一显示窗口就崩：它的字体缓存
+      （MS.Internal.FontCache.MajorLanguages）在静态构造里执行 new CultureInfo("en")，
+      invariant 模式下直接抛 CultureNotFoundException。
+      这个坑很隐蔽 —— 常驻层不碰 WPF，所以要等用户第一次打开设置中心才会暴露。
+
+      UseSystemResourceKeys 同理保持 false：它会把异常消息压成资源键
+      （"Argument_CultureNotSupportedInInvariantMode" 而非可读文本），
+      而可解释的诊断正是本产品的卖点，为省几百 KB 牺牲它不划算。
+    -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <UseSystemResourceKeys>false</UseSystemResourceKeys>
 
     <!-- 性能：常驻托盘进程用工作站 GC，避免 ServerGC 的多堆内存开销 -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
