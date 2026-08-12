@@ -132,14 +132,16 @@ internal sealed class Orchestrator : IDisposable
                 OnWindowDestroyed(evt.Handle);
                 break;
 
-            // 隐藏与 cloak 都要当作"窗口从组里消失"处理。
+            // 隐藏要当作"窗口从组里消失"处理。
             //
             // 早期只处理了 Destroyed，结果 Electron 类应用（Claude、Codex、VS Code）
             // 关闭窗口时只是隐藏而非销毁，永远等不到销毁事件：
             // 窗口不见了，分组栏和标签却一直留着，再从标签拆分还会把一个
             // 已经"关掉"的窗口重新显示出来，而它已不再响应任何输入。
+            //
+            // **刻意不处理 Cloaked**：cloak 的主要来源是窗口位于另一个虚拟桌面，
+            // 把它当作消失会让用户切个桌面回来就发现分组没了。
             case WindowEventKind.Hidden:
-            case WindowEventKind.Cloaked:
                 OnWindowVanished(evt.Handle);
                 break;
 
@@ -217,7 +219,7 @@ internal sealed class Orchestrator : IDisposable
             return;
         }
 
-        if (WindowEnumerator.IsAliveAndVisible(hwnd))
+        if (WindowEnumerator.IsAliveAndShown(hwnd))
         {
             return;
         }
@@ -243,7 +245,7 @@ internal sealed class Orchestrator : IDisposable
 
         foreach (var tab in group.LiveTabs.ToList())
         {
-            if (WindowEnumerator.IsAliveAndVisible(tab.Identity.Handle))
+            if (WindowEnumerator.IsAliveAndShown(tab.Identity.Handle))
             {
                 continue;
             }
@@ -1260,7 +1262,16 @@ internal sealed class Orchestrator : IDisposable
 
         if (result.Actions.Count > 0)
         {
-            var actions = result.Actions;
+            FileLog.Debug(
+                $"组 {groupId} 产生 {result.Actions.Count} 条指令："
+                + string.Join("、", result.Actions.Select(a =>
+                    $"{a.GetType().Name}(0x{a.Target.Handle:X})")));
+        }
+
+        var actions = FilterAgainstReality(result.Actions);
+
+        if (actions.Count > 0)
+        {
             _ = _controller.ExecuteAsync(actions).ContinueWith(
                 t => ReportFailures(t.Result),
                 TaskScheduler.Default);
@@ -1274,6 +1285,47 @@ internal sealed class Orchestrator : IDisposable
         {
             RefreshRail(result.Group);
         }
+    }
+
+    /// <summary>
+    /// 把领域层产出的指令对照现实过滤一遍：**绝不对应用已经关掉的窗口动手**。
+    ///
+    /// 领域层是纯状态机，它不知道也不该知道某个窗口此刻是否还在。于是会出现
+    /// 这样一条链：用户点「关闭整组」→ 第一个应用缩到托盘 → 该成员被判定消失
+    /// → 组降到一个成员而自动解散 → 解散产出「还原剩下那个窗口」的指令 →
+    /// 而那个窗口此刻也已经被它自己的应用关掉了。
+    ///
+    /// 还原会执行 SetWindowPlacement + SW_SHOWNOACTIVATE，把一个已关闭的窗口
+    /// 硬拽回屏幕：窗口看得见，应用却认为自己已关闭，因此不响应任何输入 ——
+    /// 用户只能去托盘重新打开。两个应用都是"关闭即缩托盘"时必然撞上，
+    /// 只要有一个是真关闭（窗口已销毁，还原是空操作）就碰不到。
+    ///
+    /// 关闭指令本身永远保留：那正是我们想让它发生的事。
+    /// </summary>
+    private static List<WindowAction> FilterAgainstReality(IReadOnlyList<WindowAction> actions)
+    {
+        var kept = new List<WindowAction>(actions.Count);
+
+        foreach (var action in actions)
+        {
+            if (action is CloseWindowAction)
+            {
+                kept.Add(action);
+                continue;
+            }
+
+            if (!WindowEnumerator.IsAliveAndShown(action.Target.Handle))
+            {
+                FileLog.Info(
+                    $"跳过对已关闭窗口的 {action.GetType().Name}："
+                    + $"0x{action.Target.Handle:X}（还原它只会得到一个点不动的僵尸窗口）");
+                continue;
+            }
+
+            kept.Add(action);
+        }
+
+        return kept;
     }
 
     private static void ReportFailures(IReadOnlyList<OperationResult> results)
@@ -1500,7 +1552,9 @@ internal sealed class Orchestrator : IDisposable
     /// <summary>拆散所有组并还原全部窗口。主开关关闭与安全退出都走这里。</summary>
     public void DissolveEverything()
     {
-        var actions = _manager.DissolveAll();
+        // 同样要对照现实过滤：解散时组里可能已经有成员被它自己的应用关掉了，
+        // 对它们做还原只会拽出一个点不动的僵尸窗口。
+        var actions = FilterAgainstReality(_manager.DissolveAll());
 
         foreach (var groupId in _rails.Keys.ToList())
         {

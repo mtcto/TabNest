@@ -478,6 +478,18 @@ public sealed class WindowController : IDisposable
     /// </summary>
     private OperationResult Restore(nint hwnd, WindowSnapshot snapshot, Stopwatch stopwatch)
     {
+        // 应用已经把窗口关掉（隐藏）时绝不还原。
+        //
+        // 下面的 SetWindowPlacement 带 SW_SHOWNOACTIVATE，会把一个隐藏的窗口
+        // 重新显示出来 —— 窗口出现在屏幕上，应用却认为自己已关闭，于是不响应
+        // 任何输入，用户只能去托盘重新打开它。这个判断放在这里而不是只放在
+        // 编排层，是因为指令入队到真正执行之间还有一段时间窗口，
+        // 应用完全可能正好在这期间把窗口关掉。
+        if (!User32.IsWindowVisible(hwnd))
+        {
+            return OperationResult.Fail("窗口已被其应用关闭，跳过还原以免拽出一个点不动的僵尸窗口。");
+        }
+
         // 保险起见改回默认圆角：早期版本改过成员窗口的圆角偏好，
         // 用户可能还留着被改过的窗口，这里顺手复原。
         SetCornerPreference(hwnd, Dwmapi.DWMWCP_DEFAULT);

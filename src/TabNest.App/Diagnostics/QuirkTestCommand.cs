@@ -27,6 +27,11 @@ internal static class QuirkTestCommand
         Console.WriteLine($"TabNest {BuildInfo.DisplayVersion} 疑难窗口回归测试");
         Console.WriteLine();
 
+        // 诊断命令同样落日志：这些场景的失败往往发生在指令产生与执行之间，
+        // 只看断言结果无法判断到底发出了什么指令。
+        AppPaths.EnsureCreated();
+        Core.Diagnostics.FileLog.Initialize(AppPaths.LogDirectory, Core.Diagnostics.LogLevel.Debug);
+
         var processes = new ProcessInspector();
         var enumerator = new WindowEnumerator(processes);
 
@@ -191,7 +196,7 @@ internal static class QuirkTestCommand
         failures += Check(
             "关闭后组内不再有隐藏的成员",
             after is null || after.LiveTabs.All(t =>
-                WindowEnumerator.IsAliveAndVisible(t.Identity.Handle)),
+                WindowEnumerator.IsAliveAndShown(t.Identity.Handle)),
             "组里还留着已经隐藏的窗口，分组栏会指向看不见的窗口");
 
         var rail = orchestrator.GetRailForTest(groupId);
@@ -200,6 +205,24 @@ internal static class QuirkTestCommand
             "组已清空时分组栏随之关闭",
             after is null || after.LiveTabCount > 0 || rail is null,
             "组里一个活着的成员都没有了，分组栏却还在");
+
+        // 最关键的一条：两个窗口都必须保持关闭状态。
+        //
+        // 缺陷形态是第一个窗口缩到托盘后组降到一个成员而自动解散，
+        // 解散又产出"还原剩下那个窗口"的指令，把一个应用已经关掉的窗口
+        // 硬拽回屏幕 —— 它看得见却不响应任何输入，用户只能去托盘重开。
+        // 只有两个应用都是"关闭即缩托盘"时才会撞上：有一个是真关闭的话，
+        // 它的窗口已销毁，还原是空操作，问题就被掩盖了。
+        var resurrected = new[] { hider, other }
+            .Where(w => WindowEnumerator.IsAliveAndShown(w.Identity.Handle))
+            .ToList();
+
+        failures += Check(
+            "关闭后没有窗口被还原操作复活",
+            resurrected.Count == 0,
+            $"{resurrected.Count} 个已关闭的窗口又被显示出来："
+            + string.Join("、", resurrected.Select(w => w.Title))
+            + " —— 它们在屏幕上但不响应任何输入");
 
         return failures;
     }

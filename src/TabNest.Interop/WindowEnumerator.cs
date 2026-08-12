@@ -258,28 +258,23 @@ public sealed class WindowEnumerator(ProcessInspector processes)
     public static nint ForegroundWindow() => User32.GetForegroundWindow();
 
     /// <summary>
-    /// 窗口是否仍是一个"活着且用户能看到"的顶层窗口。
+    /// 窗口是否仍被它自己的应用"展示着"。
     ///
-    /// 用于判定组成员是否已经消失。刻意**把最小化算作还活着**：
-    /// 最小化是用户随时会还原的临时状态，把它当作退组会让用户最小化一下
-    /// 再还原就发现窗口被踢出了分组。
+    /// 这是判定"组成员是否已经被关掉"的唯一可靠判据，也是执行任何还原、
+    /// 激活、对齐之前必须过的一关 —— 对应用已经关掉的窗口做还原等于把它
+    /// 从坟里拽出来：窗口出现在屏幕上，应用却认为自己已关闭，于是它不响应
+    /// 任何输入，用户只能去托盘重新打开。
     ///
-    /// 而被关闭的窗口无论销毁还是隐藏，都不会再满足 IsWindowVisible。
+    /// 三类状态刻意都算作"还活着"，因为它们都是用户随时会回来的临时状态：
+    ///   - **最小化**：IsWindowVisible 仍为 true，最小化不改变可见性标志；
+    ///   - **被 cloak**：窗口在另一个虚拟桌面上。绝不能算作消失 ——
+    ///     那会让用户切个虚拟桌面回来发现分组没了；
+    ///   - 被其他窗口遮挡：与可见性无关。
+    ///
+    /// 而被关闭的窗口无论是销毁还是隐藏到托盘，都不再满足 IsWindowVisible。
     /// </summary>
-    public static bool IsAliveAndVisible(nint hwnd)
-    {
-        if (hwnd == 0 || !User32.IsWindow(hwnd))
-        {
-            return false;
-        }
-
-        if (User32.IsIconic(hwnd))
-        {
-            return true;
-        }
-
-        return User32.IsWindowVisible(hwnd) && !IsCloaked(hwnd);
-    }
+    public static bool IsAliveAndShown(nint hwnd) =>
+        hwnd != 0 && User32.IsWindow(hwnd) && User32.IsWindowVisible(hwnd);
 
     /// <summary>
     /// 目标窗口顶部的圆角半径（物理像素）。0 表示直角。

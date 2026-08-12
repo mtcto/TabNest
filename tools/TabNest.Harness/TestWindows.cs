@@ -1,3 +1,5 @@
+using System.Windows.Interop;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -9,7 +11,7 @@ namespace TabNest.Harness;
 /// 六类测试窗口。每一类都对应一个真实世界里会让窗口管理工具出问题的场景，
 /// 目的是让这些场景可以被反复复现，而不必每次去开 IDEA、Chrome 碰运气。
 /// </summary>
-internal static class TestWindows
+internal static partial class TestWindows
 {
     private static int _counter;
 
@@ -175,16 +177,35 @@ internal static class TestWindows
     {
         var window = Decorate(new Window(), "关闭即隐藏", Brushes.Teal,
             "关闭时只隐藏窗口而不销毁，永远不会发出销毁事件。\n"
-            + "TabNest 必须据此把它移出分组，而不是留下一个指向隐形窗口的标签。");
+            + "TabNest 必须据此把它移出分组，且绝不能再把它显示回来。");
 
         window.Closing += (_, e) =>
         {
             e.Cancel = true;
-            window.Hide();
+
+            // 刻意直接隐藏**原生窗口**，而不是调 WPF 的 window.Hide()。
+            //
+            // WPF 的 Hide 会把 Visibility 记为 Hidden 并持续跟踪：外部若强行
+            // 显示这个窗口，WPF 会把它再藏回去，于是"窗口被复活"这个缺陷
+            // 在 WPF 宿主下根本复现不出来。而 Electron 应用（Claude、Codex）
+            // 隐藏窗口时没有这层托管记账，外部一显示它就真的出现在屏幕上，
+            // 但应用早已认为自己关闭，因此不响应任何输入。
+            // 要让测试真的能抓住那个缺陷，这里必须绕开 WPF 的记账。
+            var hwnd = new WindowInteropHelper(window).Handle;
+            if (hwnd != 0)
+            {
+                ShowWindow(hwnd, SW_HIDE);
+            }
         };
 
         return window;
     }
+
+    private const int SW_HIDE = 0;
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool ShowWindow(nint hWnd, int nCmdShow);
 
     private static Window Decorate(Window window, string label, Brush accent, string description)
     {
