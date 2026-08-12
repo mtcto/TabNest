@@ -22,6 +22,14 @@ public sealed record RailTheme
     public uint DropHighlight { get; init; }
 
     /// <summary>
+    /// 关闭「背景条」时分组栏的底色。
+    ///
+    /// 取与窗口标题栏接近的颜色，让标签看起来像直接浮在窗口上方而不是坐在一条灰带上。
+    /// 不能直接用透明：分组栏是独立窗口，透明会露出它下面的桌面而不是承载窗口。
+    /// </summary>
+    public uint WindowBlend { get; init; }
+
+    /// <summary>
     /// 默认主题：灰白底、深色字。
     ///
     /// 开发者场景里窗口以深色为主（IDE、终端），浅灰背景与它们对比强烈，
@@ -41,6 +49,7 @@ public sealed record RailTheme
         Border = 0xFFCCCCCC,
         DegradedText = 0xFFB06000,
         DropHighlight = 0xFF0078D4,
+        WindowBlend = 0xFFF5F5F5,
     };
 
     public static RailTheme Light { get; } = new()
@@ -53,5 +62,6 @@ public sealed record RailTheme
         Border = 0xFFD8D8D8,
         DegradedText = 0xFFB07000,
         DropHighlight = 0xFF0078D4,
+        WindowBlend = 0xFFFAFAFA,
     };
 }

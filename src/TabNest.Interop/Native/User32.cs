@@ -45,6 +45,9 @@ internal static partial class User32
 
     public const uint WM_HOTKEY = 0x0312;
 
+    [LibraryImport(Lib)]
+    public static partial short GetKeyState(int nVirtKey);
+
     [LibraryImport(Lib, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool RegisterHotKey(nint hWnd, int id, uint fsModifiers, uint vk);

@@ -21,6 +21,18 @@ public sealed record RailRenderState
 
     /// <summary>拖拽重排时的插入指示线位置，null 表示不显示。</summary>
     public int? DropIndicatorIndex { get; init; }
+
+    /// <summary>标签是否使用圆角。对应设置里的「标签样式：传统 / 圆形」。</summary>
+    public bool RoundedTabs { get; init; } = true;
+
+    /// <summary>
+    /// 是否绘制标签后方的背景条。
+    /// 关掉之后分组栏背景与窗口同色，标签像是直接浮在窗口上方。
+    /// </summary>
+    public bool ShowBackgroundBar { get; init; } = true;
+
+    /// <summary>拖动标签重排是否需要按住修饰键。防止在标签栏上误拖导致顺序变乱。</summary>
+    public bool RequireModifierToMoveTabs { get; init; }
 }
 
 /// <summary>
@@ -47,7 +59,12 @@ internal static class RailRenderer
         }
 
         var canvas = paint.Canvas;
-        canvas.FillRect(PixelRect.FromSize(0, 0, width, height), state.Theme.Background);
+
+        // 背景条关掉时也必须填满，否则 GDI 会留下上一帧的残像 ——
+        // 只是填成与窗口同色，视觉上标签像直接浮在窗口上方。
+        canvas.FillRect(
+            PixelRect.FromSize(0, 0, width, height),
+            state.ShowBackgroundBar ? state.Theme.Background : state.Theme.WindowBlend);
 
         PaintMenuButton(canvas, state);
         PaintCloseGroupButton(canvas, state);
@@ -73,10 +90,11 @@ internal static class RailRenderer
 
         if (isActive || isHovered)
         {
+            // 半径为 0 时 FillRoundRect 会退化成 FillRect，正是「传统（直角）」标签样式。
             canvas.FillRoundRect(
                 layout.Bounds,
                 isActive ? theme.ActiveTabBackground : theme.HoverTabBackground,
-                TabCornerRadius);
+                state.RoundedTabs ? TabCornerRadius : 0);
         }
 
         // 组颜色只画一条细窄竖条，不做大面积填充 —— 颜色服务于识别，不该成为装饰负担。
@@ -98,6 +116,7 @@ internal static class RailRenderer
 
         var title = tab.IsResponding ? tab.DisplayTitle : $"{tab.DisplayTitle}（无响应）";
         canvas.DrawText(title, layout.TextBounds, textColor, state.Dpi);
+
 
         if (layout.CloseBounds.Width > 0)
         {

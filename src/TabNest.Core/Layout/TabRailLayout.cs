@@ -58,6 +58,83 @@ public sealed record RailMetrics
     }
 }
 
+/// <summary>
+/// 把用户的外观设置翻译成分组栏度量。
+///
+/// 这一层存在的理由是血的教训：早期 <c>RefreshRail</c> 直接 <c>new RailMetrics()</c>，
+/// 只把关闭按钮策略和菜单按钮开关传了进去。结果设置中心里"加高标签""显示窗口图标"
+/// "可变宽度标签""显示关闭整组按钮"这些开关全都能切换、能落盘、能命中，
+/// **点了却毫无效果** —— 而三层测试全绿，因为它们验证的是"能切换/能保存/能命中"，
+/// 没有一个验证"切换之后行为真的变了"。
+///
+/// 做成纯函数就能对着它断言"开关一变，度量必须跟着变"。
+/// </summary>
+public static class RailAppearance
+{
+    /// <summary>加高模式下分组栏的高度。</summary>
+    private const int TallHeight = 42;
+
+    public static RailMetrics MetricsFor(AppearanceSettings appearance, RailMetrics? baseline = null)
+    {
+        ArgumentNullException.ThrowIfNull(appearance);
+
+        var m = baseline ?? new RailMetrics();
+
+        return m with
+        {
+            Height = appearance.TallerTabs ? TallHeight : m.Height,
+
+            // 不显示图标时把尺寸归零，布局据此不再为它留位置 ——
+            // 只是"不画"而位置照留，标题会莫名其妙地缩进一块。
+            IconSize = appearance.ShowWindowIcon ? m.IconSize : 0,
+
+            MenuButtonWidth = appearance.HideMenuButton ? 0 : m.MenuButtonWidth,
+            CloseGroupButtonWidth = appearance.ShowCloseAllButton ? m.CloseGroupButtonWidth : 0,
+        };
+    }
+
+    /// <summary>
+    /// 依据可见性策略判断此刻是否应当显示分组栏。
+    /// </summary>
+    /// <param name="visibility">用户选择的策略。</param>
+    /// <param name="isOwnerForeground">承载窗口当前是否为前台窗口。</param>
+    /// <param name="isOwnerMaximized">承载窗口是否最大化。</param>
+    /// <param name="isPointerNearTop">光标是否停在屏幕顶部区域（用于隐藏模式下的浮出）。</param>
+    /// <param name="liveTabCount">组内存活标签数。</param>
+    /// <param name="hideWhenSingleTab">只有一个标签时是否隐藏。</param>
+    public static bool ShouldShowRail(
+        TabVisibility visibility,
+        bool isOwnerForeground,
+        bool isOwnerMaximized,
+        bool isPointerNearTop,
+        int liveTabCount,
+        bool hideWhenSingleTab)
+    {
+        // 单标签隐藏优先于一切策略：一个标签的标签栏不承载任何信息。
+        if (hideWhenSingleTab && liveTabCount <= 1)
+        {
+            return false;
+        }
+
+        if (liveTabCount == 0)
+        {
+            return false;
+        }
+
+        return visibility switch
+        {
+            TabVisibility.AlwaysVisible => true,
+            TabVisibility.ActiveWindowOnly => isOwnerForeground,
+
+            // 最大化时隐藏，但光标移到屏幕顶部要能浮出来 ——
+            // 否则最大化之后就再也切不了标签，只能先还原窗口。
+            TabVisibility.HideWhenMaximized => !isOwnerMaximized || isPointerNearTop,
+
+            _ => isPointerNearTop,
+        };
+    }
+}
+
 /// <summary>轨道上一个标签的位置。坐标相对于轨道窗口左上角。</summary>
 /// <param name="Identity">对应的窗口。</param>
 /// <param name="Bounds">标签整体矩形。</param>
@@ -177,7 +254,8 @@ public static class TabRailLayoutEngine
         RailMetrics metrics,
         CloseButtonPolicy showCloseOn = CloseButtonPolicy.ActiveTabOnly,
         WindowIdentity? hoveredIdentity = null,
-        bool showMenuButton = true)
+        bool showMenuButton = true,
+        bool variableWidth = false)
     {
         ArgumentNullException.ThrowIfNull(tabs);
         ArgumentNullException.ThrowIfNull(metrics);
@@ -226,7 +304,7 @@ public static class TabRailLayoutEngine
         }
 
         var available = railBounds.Width - (metrics.SidePadding * 2) - menuWidth - closeWidth;
-        var tabWidth = ComputeTabWidth(available, live.Count, metrics);
+        var uniformWidth = ComputeTabWidth(available, live.Count, metrics);
 
         var layouts = new List<TabLayout>(live.Count);
         var x = metrics.SidePadding + menuWidth;
@@ -240,6 +318,10 @@ public static class TabRailLayoutEngine
 
         foreach (var tab in live)
         {
+            var tabWidth = variableWidth
+                ? EstimateTabWidth(tab, metrics, uniformWidth)
+                : uniformWidth;
+
             // 放不下就停下。溢出的标签数量记在 HiddenTabCount 里，由 UI 提示用户。
             if (x + tabWidth > limit)
             {
@@ -248,9 +330,13 @@ public static class TabRailLayoutEngine
 
             var bounds = PixelRect.FromSize(x, 0, tabWidth, metrics.Height);
 
+            // 图标尺寸为 0 表示用户关掉了"显示窗口图标"。此时不能只是不画，
+            // 还必须把它占的位置一并收回，否则标题会莫名其妙地缩进一块。
             var iconTop = (metrics.Height - metrics.IconSize) / 2;
-            var iconBounds = PixelRect.FromSize(
-                bounds.Left + metrics.SidePadding, iconTop, metrics.IconSize, metrics.IconSize);
+            var iconBounds = metrics.IconSize > 0
+                ? PixelRect.FromSize(
+                    bounds.Left + metrics.SidePadding, iconTop, metrics.IconSize, metrics.IconSize)
+                : PixelRect.FromSize(bounds.Left + metrics.SidePadding, iconTop, 0, 0);
 
             var showClose = ShouldShowClose(tab, activeIdentity, hoveredIdentity, showCloseOn);
             var closeBounds = PixelRect.Empty;
@@ -267,7 +353,9 @@ public static class TabRailLayoutEngine
 
             // 文本区域夹在图标和关闭按钮之间。关闭按钮隐藏时也预留它的宽度，
             // 否则悬停时按钮出现会把标题挤得跳动一下。
-            var textLeft = iconBounds.Right + metrics.SidePadding;
+            var textLeft = metrics.IconSize > 0
+                ? iconBounds.Right + metrics.SidePadding
+                : bounds.Left + metrics.SidePadding;
             var textRight = bounds.Right - metrics.SidePadding - metrics.CloseButtonSize;
             var textBounds = textRight > textLeft
                 ? new PixelRect(textLeft, 0, textRight, metrics.Height)
@@ -308,6 +396,49 @@ public static class TabRailLayoutEngine
 
         return Math.Clamp(perTab, metrics.MinTabWidth, metrics.MaxTabWidth);
     }
+
+    /// <summary>
+    /// 估算可变宽度模式下单个标签该占多宽。
+    ///
+    /// 布局层在 Core 里，拿不到绘图设备，因此只能按字符数估算而不能真正测量文本。
+    /// 这是刻意的取舍：把整套布局搬到 Interop 去换取精确宽度，会让它再也无法单测，
+    /// 而分组栏布局的正确性（不重叠、不越界、不盖住关闭按钮）比几像素的宽度误差重要得多。
+    ///
+    /// CJK 字符按两倍宽度计 —— 按等宽估算会让中文标题的标签明显偏窄，文字被截断。
+    /// </summary>
+    private static int EstimateTabWidth(TabItem tab, RailMetrics metrics, int fallback)
+    {
+        var title = tab.DisplayTitle;
+
+        if (string.IsNullOrEmpty(title))
+        {
+            return Math.Clamp(fallback, metrics.MinTabWidth, metrics.MaxTabWidth);
+        }
+
+        var units = 0;
+
+        foreach (var ch in title)
+        {
+            units += IsWide(ch) ? 2 : 1;
+        }
+
+        // 每个半角单位约半个字高，再加上图标、关闭按钮与内边距的固定开销。
+        var perUnit = Math.Max(4, metrics.Height / 4);
+        var chrome = (metrics.SidePadding * 3) + metrics.IconSize + metrics.CloseButtonSize;
+
+        return Math.Clamp(chrome + (units * perUnit), metrics.MinTabWidth, metrics.MaxTabWidth);
+    }
+
+    /// <summary>CJK 与全角标点按双倍宽度计。</summary>
+    private static bool IsWide(char ch) =>
+        ch is >= 'ᄀ' and (
+            <= 'ᅟ'
+            or >= '⺀' and <= '꓏'
+            or >= '가' and <= '힣'
+            or >= '豈' and <= '﫿'
+            or >= '︰' and <= '﹯'
+            or >= '＀' and <= '｠'
+            or >= '￠' and <= '￦');
 
     private static bool ShouldShowClose(
         TabItem tab,

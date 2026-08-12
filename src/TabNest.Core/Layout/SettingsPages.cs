@@ -155,6 +155,74 @@ public static class SettingsPages
                 ],
             },
 
+            new SectionBlock
+            {
+                Title = "标签栏可见性",
+                Description = "分组栏在什么时候显示。",
+            },
+            new ChoiceBlock
+            {
+                Id = SettingId.TabVisibility,
+                Value = (int)s.Appearance.Visibility,
+                Options =
+                [
+                    new ChoiceOption(
+                        (int)TabVisibility.AlwaysVisible,
+                        "始终可见",
+                        "任何时候都显示分组栏。",
+                        Illustration.RailAbove),
+                    new ChoiceOption(
+                        (int)TabVisibility.ActiveWindowOnly,
+                        "仅活动窗口",
+                        "只有当该组的窗口是前台窗口时才显示。",
+                        Illustration.TaskbarActiveOnly),
+                    new ChoiceOption(
+                        (int)TabVisibility.HideWhenMaximized,
+                        "最大化时隐藏",
+                        "窗口最大化后隐藏，光标移到窗口顶部时浮出。",
+                        Illustration.IntegratedTitleBar),
+                    new ChoiceOption(
+                        (int)TabVisibility.AlwaysHidden,
+                        "始终隐藏",
+                        "平时不显示，光标移到窗口顶部时才浮出。",
+                        Illustration.TaskbarSingle),
+                ],
+            },
+
+            new SectionBlock
+            {
+                Title = "关闭按钮",
+                Description = "标签上的关闭按钮何时出现。",
+            },
+            new ChoiceBlock
+            {
+                Id = SettingId.CloseButtonPolicy,
+                Value = (int)s.Appearance.CloseButton,
+                Options =
+                [
+                    new ChoiceOption(
+                        (int)CloseButtonPolicy.ActiveTabOnly,
+                        "仅活动标签",
+                        "只有当前标签显示关闭按钮，最不容易误点。",
+                        Illustration.TabsRounded),
+                    new ChoiceOption(
+                        (int)CloseButtonPolicy.OnHoverOnly,
+                        "悬停时显示",
+                        "光标停在哪个标签上，哪个才显示。",
+                        Illustration.TabsRounded),
+                    new ChoiceOption(
+                        (int)CloseButtonPolicy.AllTabs,
+                        "全部显示",
+                        "每个标签都显示关闭按钮。",
+                        Illustration.TabsSquare),
+                    new ChoiceOption(
+                        (int)CloseButtonPolicy.Never,
+                        "从不显示",
+                        "改用中键或右键菜单关闭标签。",
+                        Illustration.TabsSquare),
+                ],
+            },
+
             new SectionBlock { Title = "显示" },
             new ToggleBlock
             {
@@ -202,13 +270,6 @@ public static class SettingsPages
                 Description = "隐藏后仍可在标签上点右键打开同一菜单。",
                 Value = s.Appearance.HideMenuButton,
             },
-            new ToggleBlock
-            {
-                Id = SettingId.DisableAnimation,
-                Title = "不使用动画",
-                Description = "系统的「减少动态效果」开启时，无论此项如何设置都会禁用动画。",
-                Value = s.Appearance.DisableAnimation,
-            },
         ],
     };
 
@@ -221,6 +282,58 @@ public static class SettingsPages
         [
             new SectionBlock
             {
+                Title = "触发方式",
+                Description = "拖动窗口时，什么条件下才进入分组判定。",
+            },
+            new ChoiceBlock
+            {
+                Id = SettingId.DragTrigger,
+                Value = (int)s.Grouping.Trigger,
+                Options =
+                [
+                    new ChoiceOption(
+                        (int)DragTrigger.Always,
+                        "总是",
+                        "拖到另一个窗口的标题栏就会提示合并。",
+                        Illustration.RailAbove),
+                    new ChoiceOption(
+                        (int)DragTrigger.RequireShift,
+                        "按住 Shift",
+                        "不按住时只是普通地拖动窗口，完全不会误分组。",
+                        Illustration.TabsSquare),
+                    new ChoiceOption(
+                        (int)DragTrigger.RequireCtrl,
+                        "按住 Ctrl",
+                        "同上，改用 Ctrl 键。",
+                        Illustration.TabsSquare),
+                ],
+            },
+
+            new SectionBlock
+            {
+                Title = "中键点击标签",
+            },
+            new ChoiceBlock
+            {
+                Id = SettingId.MiddleClick,
+                Value = (int)s.Grouping.MiddleClick,
+                Options =
+                [
+                    new ChoiceOption(
+                        (int)MiddleClickAction.CloseTab,
+                        "关闭标签",
+                        "与浏览器一致。",
+                        Illustration.TabsRounded),
+                    new ChoiceOption(
+                        (int)MiddleClickAction.Nothing,
+                        "不做任何事",
+                        "避免误触关闭窗口。",
+                        Illustration.TabsSquare),
+                ],
+            },
+
+            new SectionBlock
+            {
                 Title = "手动拖放分组",
                 Description = "把一个窗口拖到另一个窗口的标题栏即可合并。",
             },
@@ -228,7 +341,7 @@ public static class SettingsPages
             {
                 Id = SettingId.SameApplicationOnly,
                 Title = "仅允许同一应用的窗口分组",
-                Description = "防止误把不相干的应用合并到一起。",
+                Description = "防止误把不相干的应用合并到一起。按住 Shift 可临时放宽这条限制。",
                 Value = s.Grouping.SameApplicationOnly,
             },
             new ToggleBlock
@@ -522,11 +635,6 @@ public static class SettingsPages
             {
                 Appearance = s.Appearance with { HideMenuButton = !s.Appearance.HideMenuButton },
             },
-            SettingId.DisableAnimation => s with
-            {
-                Appearance = s.Appearance with { DisableAnimation = !s.Appearance.DisableAnimation },
-            },
-
             SettingId.SameApplicationOnly => s with
             {
                 Grouping = s.Grouping with { SameApplicationOnly = !s.Grouping.SameApplicationOnly },

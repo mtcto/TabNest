@@ -658,6 +658,19 @@ internal sealed class Orchestrator : IDisposable
             return;
         }
 
+        // 触发方式：用户可要求必须按住某个键才进入分组判定，
+        // 否则只是普通地拖动窗口。这是防误分组的第一道闸。
+        if (!IsDragTriggerSatisfied())
+        {
+            if (_dropCandidate != 0)
+            {
+                _dropCandidate = 0;
+                _dropHint?.HideHint();
+            }
+
+            return;
+        }
+
         // 命中判定要枚举光标下的窗口链并逐个做资格评估，是拖动路径上最贵的一步。
         // 位置事件不合并之后它会以事件原始频率被调用，把 UI 线程堵出几十毫秒的积压。
         // 30ms 内光标挪不了几个像素，节流对判定结果毫无影响。
@@ -697,6 +710,20 @@ internal sealed class Orchestrator : IDisposable
 
         (_dropHint ??= new DropHintWindow()).ShowFor(candidate, bounds, dpi, blockedReason);
     }
+
+    /// <summary>
+    /// 当前是否满足进入分组判定的触发条件。
+    ///
+    /// 「总是」之外的三种都要求按住某个键。右键按住这一项无法用 GetKeyState 可靠判定
+    /// （拖动期间右键状态会被窗口的模态拖动循环吞掉），退化为与 Ctrl 相同处理并在
+    /// 设置页注明 —— 与其提供一个时灵时不灵的选项，不如明确降级。
+    /// </summary>
+    private bool IsDragTriggerSatisfied() => _settings.Grouping.Trigger switch
+    {
+        DragTrigger.Always => true,
+        DragTrigger.RequireShift => ModifierKeys.IsShiftDown(),
+        _ => ModifierKeys.IsCtrlDown(),
+    };
 
     /// <summary>
     /// 在光标处的候选链里挑出拖放目标。
@@ -981,6 +1008,19 @@ internal sealed class Orchestrator : IDisposable
 
         FileLog.Info($"  被拖窗口资格：可分组（{dragged.ProcessName}）");
 
+        // 「仅允许同一应用的窗口分组」是防误分组最直接的一道保护。
+        // 按住 Shift 可临时放宽 —— 偶尔确实需要把不同应用放在一起，
+        // 为此去设置里改一趟再改回来太重。
+        if (_settings.Grouping.SameApplicationOnly
+            && !string.Equals(dragged.ProcessName, target.ProcessName, StringComparison.OrdinalIgnoreCase)
+            && !ModifierKeys.IsShiftDown())
+        {
+            FileLog.Info(
+                $"  未合并：设置为仅允许同一应用分组，而「{dragged.ProcessName}」"
+                + $"与「{target.ProcessName}」不同（按住 Shift 可临时放宽）。");
+            return;
+        }
+
         // 目标已在组里 → 加入该组；否则用两个窗口新建一组。
         var targetGroup = _manager.FindGroupByWindow(target.Identity);
 
@@ -1077,6 +1117,19 @@ internal sealed class Orchestrator : IDisposable
             if (_liftedGroupId == groupId)
             {
                 SettleGroup(groupId, _liftAuthority);
+            }
+
+            return;
+        }
+
+        // 中键该做什么由用户设置决定。分组栏只上报"中键点了哪个标签"，
+        // 策略留在编排层，避免同一个决定散落在两处。
+        if (interaction.Action is RailAction.MiddleClickTab)
+        {
+            if (_settings.Grouping.MiddleClick is MiddleClickAction.CloseTab)
+            {
+                Apply(_manager.CloseTab(groupId, interaction.Target), groupId);
+                ScheduleSweep(groupId);
             }
 
             return;
@@ -1637,6 +1690,8 @@ internal sealed class Orchestrator : IDisposable
         _hotkeys = new HotkeyRegistrar(_dispatcher.Handle);
         _dispatcher.HotkeyPressed += OnHotkeyPressed;
         _hotkeys.Apply(_settings.Hotkeys);
+
+        ReconcileStartupSetting();
     }
 
     private void OnHotkeyPressed(int id)
@@ -1929,15 +1984,45 @@ internal sealed class Orchestrator : IDisposable
             _cornerRadiusCache[active.Identity.Handle] = cornerRadius;
         }
 
-        var metrics = new RailMetrics().ScaleTo(dpi) with { TopCornerRadius = cornerRadius };
+        var appearance = _settings.Appearance;
+
+        // 度量必须由用户设置推导，不能用一份默认值。
+        //
+        // 早期这里是 new RailMetrics()，只把关闭按钮策略和菜单按钮开关传了进去，
+        // 于是「加高标签」「显示窗口图标」「可变宽度」「显示关闭整组按钮」这些开关
+        // 能切换、能落盘、能命中，点了却毫无效果 —— 而三层测试全绿，
+        // 因为它们验证的是"能切换/能保存/能命中"，没有一个验证"切换之后行为真的变了"。
+        var metrics = RailAppearance.MetricsFor(appearance).ScaleTo(dpi)
+            with { TopCornerRadius = cornerRadius };
+
+        // 可见性策略：不该显示时把分组栏藏起来，而不是不刷新它。
+        var owner = active.Identity.Handle;
+        var shouldShow = RailAppearance.ShouldShowRail(
+            appearance.Visibility,
+            isOwnerForeground: WindowEnumerator.ForegroundWindow() == owner,
+            isOwnerMaximized: WindowEnumerator.IsMaximized(owner),
+            isPointerNearTop: IsPointerNearRail(anchor, metrics.Height),
+            liveTabCount: group.LiveTabCount,
+            appearance.HideWhenSingleTab);
+
+        if (!shouldShow)
+        {
+            if (_rails.TryGetValue(group.Id, out var hidden))
+            {
+                hidden.HideWindow();
+            }
+
+            return;
+        }
 
         var layout = TabRailLayoutEngine.Compute(
             group.Tabs,
             active.Identity,
             anchor,
             metrics,
-            _settings.Appearance.CloseButton,
-            showMenuButton: !_settings.Appearance.HideMenuButton);
+            appearance.CloseButton,
+            showMenuButton: !appearance.HideMenuButton,
+            variableWidth: appearance.VariableWidthTabs);
 
         var railStart = Stopwatch.StartNew();
         var rail = GetOrCreateRail(group.Id);
@@ -1950,6 +2035,9 @@ internal sealed class Orchestrator : IDisposable
                 ActiveIdentity = active.Identity,
                 Theme = RailTheme.Default,
                 Dpi = dpi,
+                RoundedTabs = appearance.RoundedTabs,
+                ShowBackgroundBar = appearance.ShowBackgroundBar,
+                RequireModifierToMoveTabs = _settings.Grouping.RequireModifierToMoveTabs,
             },
             ownerHwnd: active.Identity.Handle);
 
@@ -1961,6 +2049,27 @@ internal sealed class Orchestrator : IDisposable
                 $"分组栏刷新耗时 {railStart.ElapsedMilliseconds}ms"
                 + $"（组 {group.Id}，{group.LiveTabCount} 个标签）");
         }
+    }
+
+    /// <summary>
+    /// 光标是否停在分组栏应当浮出的区域。
+    ///
+    /// 判定范围比分组栏本身高一些：分组栏隐藏时它并不占位，
+    /// 只按分组栏自身高度判定的话，用户得把光标精确停在一条看不见的窄带上才能唤出它。
+    /// </summary>
+    private static bool IsPointerNearRail(PixelRect anchor, int railHeight)
+    {
+        if (!User32Cursor.TryGet(out var cursor))
+        {
+            return false;
+        }
+
+        var band = Math.Max(railHeight, 8) * 2;
+
+        return cursor.X >= anchor.Left
+            && cursor.X < anchor.Right
+            && cursor.Y >= anchor.Top - band
+            && cursor.Y < anchor.Top + band;
     }
 
     private TabRailWindow GetOrCreateRail(string groupId)
@@ -2048,6 +2157,24 @@ internal sealed class Orchestrator : IDisposable
             _hotkeys?.Apply(updated.Hotkeys);
         }
 
+        // 开机自启必须真的写注册表。
+        //
+        // 早期这个开关只把值存进 settings.json，谁也没读它 —— 用户开了它，
+        // 重启后发现 TabNest 没起来，而设置里明明是开着的。
+        if (previous.RunAtStartup != updated.RunAtStartup)
+        {
+            var exe = Environment.ProcessPath ?? string.Empty;
+
+            if (!StartupRegistration.Set(updated.RunAtStartup, exe))
+            {
+                // 写失败就把设置回滚，否则界面显示"已开启"而实际没生效，
+                // 比一开始就失败更让人困惑。
+                FileLog.Warn("开机自启设置未能写入注册表，已回滚该项。");
+                _settings = _settings with { RunAtStartup = previous.RunAtStartup };
+                SaveSettings();
+            }
+        }
+
         // 外观改动只需重画分组栏。
         if (previous.Appearance != updated.Appearance)
         {
@@ -2055,6 +2182,48 @@ internal sealed class Orchestrator : IDisposable
             {
                 RefreshRail(group);
             }
+        }
+    }
+
+    /// <summary>
+    /// 启动时把开机自启的设置重新落实到注册表。
+    ///
+    /// 方向是**设置 → 注册表**，而不是反过来：设置里记的是用户的意图，
+    /// 注册表项只是实现这个意图的机制。曾经写反过一次（以注册表为准去改设置），
+    /// 结果用户开着自启、注册表项因故不在时，我们把设置也一并关掉，
+    /// 等于替用户放弃了他明确表达过的要求。
+    ///
+    /// 每次启动都重写还能自愈两种情况：清理工具删掉了那一项；
+    /// 程序被移动或重装到新目录，而注册表里还指着旧路径。
+    /// </summary>
+    private void ReconcileStartupSetting()
+    {
+        var exe = Environment.ProcessPath;
+
+        if (string.IsNullOrEmpty(exe))
+        {
+            return;
+        }
+
+        var registered = StartupRegistration.IsEnabled();
+
+        if (_settings.RunAtStartup)
+        {
+            // 已注册也重写一次，确保路径是当前这个可执行文件。
+            if (!StartupRegistration.Set(true, exe))
+            {
+                FileLog.Warn("开机自启写入失败，已把设置改回关闭以免界面与实际不符。");
+                _settings = _settings with { RunAtStartup = false };
+                SaveSettings();
+            }
+
+            return;
+        }
+
+        // 设置为关闭却仍有残留项（例如上一次卸载没清干净），一并清掉。
+        if (registered)
+        {
+            StartupRegistration.Set(false, exe);
         }
     }
 

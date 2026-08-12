@@ -257,6 +257,9 @@ public sealed class WindowEnumerator(ProcessInspector processes)
     /// </summary>
     public static nint ForegroundWindow() => User32.GetForegroundWindow();
 
+    /// <summary>窗口是否最大化。分组栏的「最大化时隐藏」策略据此判断。</summary>
+    public static bool IsMaximized(nint hwnd) => hwnd != 0 && User32.IsZoomed(hwnd);
+
     /// <summary>
     /// 窗口是否仍被它自己的应用"展示着"。
     ///

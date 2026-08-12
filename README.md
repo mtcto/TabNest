@@ -17,7 +17,7 @@ TabNest 把多个独立的 Windows 窗口组织成一个标签组——像浏览
 ```
 src/TabNest.Core        纯领域层：组状态机、规则引擎、快照、配置。零 Win32，可 100% 单元测试
 src/TabNest.Interop     所有 P/Invoke、窗口观察、窗口控制、任务栏控制
-src/TabNest.App         常驻托盘进程、编排、标签轨道、按需加载的设置中心
+src/TabNest.App         常驻托盘进程、编排、标签轨道、设置中心（全部 Win32 自绘）
 tests/TabNest.Core.Tests    领域层单元测试
 tools/TabNest.Harness       窗口行为测试宿主（开发工具，不随产品发布）
 ```
@@ -67,7 +67,15 @@ dotnet run --project src/TabNest.App -- --watch
 
 这几条不是风格偏好，是硬性约束，违反了会直接损害产品：
 
-**常驻层不得加载 WPF。** 托盘、窗口观察、标签轨道全部走 Win32 + Direct2D，只有设置中心用 WPF 且按需加载。`PresentationFramework` 是否被加载由 `--benchmark` 自动校验。
+**整个产品不使用 WPF。** 托盘、窗口观察、标签轨道与设置中心全部走 Win32 + GDI/GDI+ 自绘。
+WPF 不支持裁剪（启用 `PublishTrimmed` 时 SDK 直接报 `NETSDK1168` 拒绝构建）也不支持 NativeAOT，
+保留它意味着自包含发布 135MB 或强制用户装运行时；摘掉后是 11MB 零依赖。
+`PresentationFramework` 是否被加载由 `--benchmark` 自动校验。
+
+**设置项必须真的生效。** 每一个出现在设置中心的开关都要有对应的行为改变，并由
+`SettingsEffectTests` 断言"改了设置，输出确实不同"。曾经有 12 个开关能切换、能落盘、能命中，
+点了却毫无效果——而当时三层测试全绿，因为它们验证的都是"能切换/能保存/能命中"，
+没有一个验证"切换之后行为真的变了"。**一个点了没反应的开关比没有这个开关更糟。**
 
 **所有 P/Invoke 集中在 `TabNest.Interop.Native`。** 其他项目不得声明 `[LibraryImport]`。
 
@@ -124,7 +132,8 @@ TabNest 在进程外，受 Windows 前台锁定机制约束。用户点击标签
 如实呈现并写清在哪里改。
 
 **尚未实现**：集成标签与原生标签替换（均需阶段二注入层）、按分组/按应用的自定义强调色取色界面、
-图形化规则编辑器、安装包与代码签名。
+图形化规则编辑器、热键重绑界面（当前热键可在设置页查看、可整体开关，改绑需编辑 `settings.json`）、
+代码签名。
 
 ## 路线
 

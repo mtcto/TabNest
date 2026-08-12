@@ -34,6 +34,14 @@ public enum RailAction
     MoveGroup,
 
     /// <summary>
+    /// 中键点击了标签。
+    ///
+    /// 刻意不在这里直接发 CloseTab：中键该做什么由用户设置决定，
+    /// 而策略属于编排层。分组栏只如实上报"用户中键点了哪个标签"。
+    /// </summary>
+    MiddleClickTab,
+
+    /// <summary>
     /// 分组条拖动结束（松手或鼠标捕获丢失）。
     /// 编排层在拖动期间把非活动成员停靠在屏外，收到这个动作才把它们落位回来 ——
     /// 丢了它成员窗口就会滞留屏外，因此捕获丢失时也必须发出。
@@ -239,7 +247,9 @@ internal sealed class TabRailWindow : Win32Window
 
         if (_isPressed && !_isDragging && Distance(point, _pressPoint) > DragThreshold)
         {
-            _isDragging = true;
+            // 用户要求"移动标签需按住修饰键"时，没按住就不进入拖拽 ——
+            // 这是防误拖的保护，点击切换标签仍然照常工作。
+            _isDragging = !state.RequireModifierToMoveTabs || ModifierKeys.IsShiftOrCtrlDown();
         }
 
         if (_isDragging)
@@ -430,7 +440,7 @@ internal sealed class TabRailWindow : Win32Window
     {
         if (_state?.Layout.HitTestTab(point) is { } tab)
         {
-            Emit(RailAction.CloseTab, tab.Identity);
+            Emit(RailAction.MiddleClickTab, tab.Identity);
         }
     }
 
