@@ -27,6 +27,10 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 
+; 安装程序自身的图标，以及「添加或删除程序」列表里显示的图标。
+SetupIconFile=..\src\TabNest.App\TabNest.ico
+UninstallDisplayIcon={app}\{#AppExeName}
+
 ; 不要求管理员权限。
 ;
 ; TabNest 只操作当前用户会话里的窗口，装到用户目录即可，这样也避免了
@@ -53,6 +57,9 @@ Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
 Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"
+
+; 安装向导与「添加或删除程序」里的图标。
+; 不指定的话前者是 Inno 的默认图标、后者是空白，与产品本身对不上。
 
 [Registry]
 ; 开机自启。写 HKCU 而非 HKLM —— 这是每个用户自己的选择。

@@ -159,6 +159,17 @@ public sealed class TrayIcon : Win32Window
 
     private static nint LoadOwnIcon()
     {
+        // 优先用按托盘尺寸加载好的共享图标。
+        //
+        // ExtractIconEx 取的是系统默认的"小图标"尺寸，而托盘图标尺寸随 DPI 变化
+        // （100% 是 16，150% 是 24，200% 是 32）。尺寸不匹配时由系统临时缩放，
+        // 高 DPI 下糊得很明显；AppIcon 会按实际尺寸从多尺寸 ICO 里挑最接近的一档。
+        if (AppIcon.Small != 0)
+        {
+            return AppIcon.Small;
+        }
+
+        // 退路：从可执行文件抽取。单文件发布等场景下资源可能不在模块里。
         var path = Environment.ProcessPath;
         if (string.IsNullOrEmpty(path))
         {
@@ -188,11 +199,16 @@ public sealed class TrayIcon : Win32Window
             _added = false;
         }
 
-        if (_data.hIcon != 0)
+        // 只销毁我们自己抽取出来的那个句柄。
+        //
+        // 来自模块资源的共享图标（AppIcon）由系统管理，销毁它会让所有窗口类上的
+        // 图标一起变空白 —— 而且这种失效是延迟发生的，极难关联到这一行。
+        if (_data.hIcon != 0 && _data.hIcon != AppIcon.Small)
         {
             Gdi32.DestroyIcon(_data.hIcon);
-            _data.hIcon = 0;
         }
+
+        _data.hIcon = 0;
 
         base.Dispose();
     }

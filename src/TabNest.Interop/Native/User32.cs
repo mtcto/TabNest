@@ -72,6 +72,24 @@ internal static partial class User32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool DestroyIcon(nint hIcon);
 
+    public const uint IMAGE_ICON = 1;
+    public const uint LR_DEFAULTCOLOR = 0;
+
+    /// <summary>托盘小图标的尺寸。随 DPI 变化，不是固定的 16。</summary>
+    public const int SM_CXSMICON = 49;
+    public const int SM_CYSMICON = 50;
+
+    [LibraryImport(Lib)]
+    public static partial int GetSystemMetrics(int nIndex);
+
+    /// <summary>
+    /// 按指定尺寸从模块资源加载图标。
+    /// 指定尺寸能让系统从多尺寸 ICO 里直接挑最接近的那一档，而不是临时缩放。
+    /// </summary>
+    [LibraryImport(Lib, EntryPoint = "LoadImageW", SetLastError = true)]
+    public static partial nint LoadImage(
+        nint hInst, nint name, uint type, int cx, int cy, uint fuLoad);
+
     [LibraryImport(Lib, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool RegisterHotKey(nint hWnd, int id, uint fsModifiers, uint vk);

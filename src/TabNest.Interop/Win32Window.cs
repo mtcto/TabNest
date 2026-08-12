@@ -73,6 +73,12 @@ public abstract class Win32Window : IDisposable
             hInstance = ModuleHandle,
             hCursor = WindowClass.LoadCursor(0, WindowClass.IDC_ARROW),
 
+            // 窗口图标。不设的话标题栏左上角、Alt+Tab、任务栏都是空白 ——
+            // 自绘窗口不像 WPF 那样自动继承应用图标，必须在窗口类上显式给出。
+            // 大图标用于 Alt+Tab 与任务栏，小图标用于标题栏。
+            hIcon = AppIcon.Large,
+            hIconSm = AppIcon.Small,
+
             // 背景刷设为 0：我们自绘全部内容，让系统先刷一次背景只会造成闪烁。
             hbrBackground = 0,
             lpszClassName = namePtr,
