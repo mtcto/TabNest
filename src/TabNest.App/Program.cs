@@ -34,6 +34,7 @@ internal static class Program
             RunKind.GroupTest => Diagnostics.GroupTestCommand.Run(mode),
             RunKind.SettingsTest => Diagnostics.SettingsTestCommand.Run(mode),
             RunKind.QuirkTest => Diagnostics.QuirkTestCommand.Run(mode),
+            RunKind.StressTest => Diagnostics.StressTestCommand.Run(mode),
             _ => RunInteractive(mode),
         };
     }
@@ -57,6 +58,7 @@ internal static class Program
               TabNest --selftest     用 Harness 测试窗口跑完整分组闭环（无 UI）
               TabNest --settingstest 校验设置中心的布局、命中与写回接线
               TabNest --quirktest    复现固定尺寸与关闭即隐藏两类窗口的回归场景
+              TabNest --stresstest   反复建组拆组并制造事件风暴，查句柄与内存泄漏
               TabNest --version      显示版本
               TabNest --help         显示本帮助
 

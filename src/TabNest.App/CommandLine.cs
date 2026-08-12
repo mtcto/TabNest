@@ -11,6 +11,7 @@ internal enum RunKind
     GroupTest,
     SettingsTest,
     QuirkTest,
+    StressTest,
     Version,
     Help,
 }
@@ -56,6 +57,9 @@ internal static class CommandLine
                     break;
                 case "quirktest":
                     kind = RunKind.QuirkTest;
+                    break;
+                case "stresstest":
+                    kind = RunKind.StressTest;
                     break;
                 case "version":
                 case "v":
