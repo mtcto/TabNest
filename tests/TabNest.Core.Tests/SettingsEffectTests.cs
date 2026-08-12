@@ -327,38 +327,101 @@ public sealed class SettingsEffectTests
         Assert.False(rule.Matches("any.exe", "AnyClass", "任意标题"));
     }
 
+    // ------------------------------------------------------------------
+    // 应用清单
+    // ------------------------------------------------------------------
+
     [Fact]
-    public void 规则页把没有条件的规则标记出来()
+    public void 加入的应用出现在清单里()
     {
-        var settings = AppSettings.Default with
-        {
-            Rules =
-            [
-                new Rules.Rule
-                {
-                    Id = "r1",
-                    Name = "空规则",
-                    Action = Rules.RuleAction.Block,
-                    Conditions = [],
-                },
-            ],
-        };
+        var s = Rules.AppList.Add(AppSettings.Default, @"C:\Program Files\JetBrains\idea64.exe");
 
-        var page = SettingsPages.Build(SettingsPage.Rules, settings);
-        var list = page.Blocks.OfType<ListBlock>().First(b => b.Title == "当前规则");
-
-        // 用户必须看得出这条规则不会生效，否则他会以为规则坏了。
-        Assert.Contains(list.Items, i => i.Primary.Contains("不会生效", StringComparison.Ordinal));
+        // 按进程名匹配，因此只取文件名 —— 同一应用装在不同位置时，
+        // 用户的意图几乎总是"这个应用"而不是"这个路径下的这一份"。
+        Assert.Equal(["idea64.exe"], Rules.AppList.Apps(s));
     }
 
     [Fact]
-    public void 规则列表可编辑且提供新建入口()
+    public void 重复加入同一应用不会产生两条()
     {
-        var page = SettingsPages.Build(SettingsPage.Rules, AppSettings.Default);
-        var list = page.Blocks.OfType<ListBlock>().First(b => b.Title == "当前规则");
+        var s = Rules.AppList.Add(AppSettings.Default, "idea64.exe");
+        s = Rules.AppList.Add(s, @"D:\Other\IDEA64.EXE");
 
-        Assert.Equal(SettingAction.EditRule, list.ItemAction);
-        Assert.Contains(list.Buttons, b => b.Action == SettingAction.AddRule);
+        Assert.Single(Rules.AppList.Apps(s));
+    }
+
+    [Fact]
+    public void 移出应用后清单里不再有它()
+    {
+        var s = Rules.AppList.Add(AppSettings.Default, "idea64.exe");
+        s = Rules.AppList.Add(s, "chrome.exe");
+        s = Rules.AppList.Remove(s, "idea64.exe");
+
+        Assert.Equal(["chrome.exe"], Rules.AppList.Apps(s));
+    }
+
+    [Fact]
+    public void 切换仅允许时清单里所有规则的动作跟着改()
+    {
+        // 复选框决定的正是这份列表的含义：勾上是允许清单，不勾是阻止清单。
+        // 只改开关不改规则动作，会让同一批应用在两种模式下表达完全相反的意思。
+        var s = Rules.AppList.Add(AppSettings.Default, "idea64.exe");
+
+        Assert.All(s.Rules, r => Assert.Equal(Rules.RuleAction.Block, r.Action));
+
+        s = Rules.AppList.SetAllowListOnly(s, true);
+
+        Assert.True(s.Grouping.AllowListOnly);
+        Assert.All(s.Rules, r => Assert.Equal(Rules.RuleAction.Allow, r.Action));
+
+        s = Rules.AppList.SetAllowListOnly(s, false);
+
+        Assert.False(s.Grouping.AllowListOnly);
+        Assert.All(s.Rules, r => Assert.Equal(Rules.RuleAction.Block, r.Action));
+    }
+
+    [Fact]
+    public void 清单不接管用户手工写的复杂规则()
+    {
+        // 手工规则可能按窗口类或标题匹配。把它显示成一个光秃秃的进程名，
+        // 会掩盖真正的匹配条件，用户改一下就把自己的规则毁了。
+        var manual = new Rules.Rule
+        {
+            Id = "manual-1",
+            Name = "只挡某个标题",
+            Action = Rules.RuleAction.Block,
+            Conditions = [new Rules.RuleCondition { Title = "私密", PartialMatch = true }],
+        };
+
+        var s = AppSettings.Default with { Rules = [manual] };
+
+        Assert.Empty(Rules.AppList.Apps(s));
+        Assert.False(Rules.AppList.IsManaged(manual));
+
+        // 切换模式也不该动它。
+        var after = Rules.AppList.SetAllowListOnly(s, true);
+        Assert.Equal(Rules.RuleAction.Block, after.Rules[0].Action);
+    }
+
+    [Fact]
+    public void 规则页展示应用清单并提供加入与移出()
+    {
+        var s = Rules.AppList.Add(AppSettings.Default, "idea64.exe");
+        var page = SettingsPages.Build(SettingsPage.Rules, s);
+        var list = page.Blocks.OfType<AppListBlock>().Single();
+
+        Assert.Equal(["idea64.exe"], list.Apps);
+    }
+
+    [Fact]
+    public void 清单为空且仅允许时提示当前没有应用能分组()
+    {
+        // 这是个容易把自己锁死的组合，提示必须点明后果。
+        var s = Rules.AppList.SetAllowListOnly(AppSettings.Default, true);
+        var page = SettingsPages.Build(SettingsPage.Rules, s);
+        var list = page.Blocks.OfType<AppListBlock>().Single();
+
+        Assert.Contains("没有任何应用能分组", list.EmptyText, StringComparison.Ordinal);
     }
 
     // ------------------------------------------------------------------

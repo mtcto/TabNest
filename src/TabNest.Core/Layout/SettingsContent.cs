@@ -182,20 +182,38 @@ public enum SettingAction
 {
     None = 0,
 
-    /// <summary>编辑第 N 条规则。</summary>
-    EditRule,
+    /// <summary>把一个应用加入清单（弹出文件选择框）。</summary>
+    AddApp,
 
-    /// <summary>新建一条规则。</summary>
-    AddRule,
+    /// <summary>把选中的应用移出清单。</summary>
+    RemoveApp,
 
-    /// <summary>删除第 N 条规则。</summary>
-    DeleteRule,
+    /// <summary>选中清单里的第 N 个应用。</summary>
+    SelectApp,
 
     /// <summary>删除第 N 个已保存分组。</summary>
     DeleteWorkspace,
 
     /// <summary>恢复第 N 个已保存分组。</summary>
     RestoreWorkspace,
+}
+
+/// <summary>
+/// 应用清单：一个带边框的列表 + 右侧的加入/移出按钮。
+///
+/// 对齐 Groupy 的「阻止/允许应用」。此前这里是完整的规则编辑器
+/// （进程 + 窗口类 + 标题的组合匹配、多条件、优先级），表达力更强，
+/// 但绝大多数人想做的只是"这个应用别参与分组"。为了覆盖少数复杂场景
+/// 而让所有人面对一张多字段表单，是把成本摊错了地方。
+/// </summary>
+public sealed record AppListBlock : ContentBlock
+{
+    public required IReadOnlyList<string> Apps { get; init; }
+
+    /// <summary>当前选中项，-1 表示没有选中。移出按钮据此启用或灰显。</summary>
+    public required int SelectedIndex { get; init; }
+
+    public required string EmptyText { get; init; }
 }
 
 /// <summary>一块颜色样本，用于颜色页展示当前配色。</summary>

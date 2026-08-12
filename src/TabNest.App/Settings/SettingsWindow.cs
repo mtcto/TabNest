@@ -120,9 +120,6 @@ public sealed class SettingsWindow : Win32Window
                 OnClick(ToPoint(lParam));
                 return 0;
 
-            case Messages.RightButtonUp:
-                OnRightClick(ToPoint(lParam));
-                return 0;
 
             case Messages.DpiChanged:
                 Invalidate();
@@ -331,80 +328,46 @@ public sealed class SettingsWindow : Win32Window
     }
 
     /// <summary>
-    /// 右键：删除列表项。
-    ///
-    /// 删除是破坏性操作，刻意不放在左键点击能碰到的地方 ——
-    /// 用户点一行的本意是编辑它，把删除也放在那里迟早会误删。
-    /// </summary>
-    private void OnRightClick(PixelPoint point)
-    {
-        if (_layout is not { } layout || _content is not { } content)
-        {
-            return;
-        }
-
-        if (!layout.ContentBounds.Contains(point))
-        {
-            return;
-        }
-
-        if (content.HitTestList(ToContentPoint(point, layout)) is { } hit
-            && hit.Action is SettingAction.EditRule)
-        {
-            HandleListAction(SettingAction.DeleteRule, hit.Index);
-        }
-    }
-
-    /// <summary>处理列表上的动作：编辑/新建规则等。</summary>
+    /// <summary>处理应用清单上的动作。</summary>
     private void HandleListAction(SettingAction action, int index)
     {
         switch (action)
         {
-            case SettingAction.AddRule:
+            case SettingAction.SelectApp:
+                if (SettingsPages.SelectedAppIndex != index)
                 {
-                    var draft = new Rule
-                    {
-                        Id = $"r{DateTimeOffset.UtcNow.Ticks:X}",
-                        Name = "新规则",
-                        Action = RuleAction.Block,
-                        Conditions = [],
-                    };
+                    SettingsPages.SelectedAppIndex = index;
+                    Invalidate();
+                }
 
-                    if (RuleEditorDialog.Show(Handle, draft, _theme) is { } created)
+                break;
+
+            case SettingAction.AddApp:
+                {
+                    var picked = FileDialog.PickExecutable(Handle, "选择要加入列表的应用");
+
+                    if (!string.IsNullOrEmpty(picked))
                     {
-                        Apply(_settings with { Rules = [.. _settings.Rules, created] });
+                        Apply(AppList.Add(_settings, picked));
                     }
 
                     break;
                 }
 
-            case SettingAction.EditRule:
+            case SettingAction.RemoveApp:
                 {
-                    if (index < 0 || index >= _settings.Rules.Count)
+                    var apps = AppList.Apps(_settings);
+                    var selected = SettingsPages.SelectedAppIndex;
+
+                    if (selected < 0 || selected >= apps.Count)
                     {
                         return;
                     }
 
-                    if (RuleEditorDialog.Show(Handle, _settings.Rules[index], _theme) is { } edited)
-                    {
-                        var rules = _settings.Rules.ToList();
-                        rules[index] = edited;
-                        Apply(_settings with { Rules = rules });
-                    }
+                    Apply(AppList.Remove(_settings, apps[selected]));
 
-                    break;
-                }
-
-            case SettingAction.DeleteRule:
-                {
-                    if (index < 0 || index >= _settings.Rules.Count)
-                    {
-                        return;
-                    }
-
-                    var rules = _settings.Rules.ToList();
-                    rules.RemoveAt(index);
-                    Apply(_settings with { Rules = rules });
+                    // 移除后选中项要收回到合法范围，否则会指向一个已经不存在的行。
+                    SettingsPages.SelectedAppIndex = Math.Min(selected, apps.Count - 2);
                     break;
                 }
 

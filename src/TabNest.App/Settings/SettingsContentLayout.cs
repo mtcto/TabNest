@@ -322,6 +322,53 @@ public sealed record ContentLayout
                         break;
                     }
 
+                case AppListBlock appList:
+                    {
+                        var blockTop = y;
+                        var pad = m.RowPadding;
+                        var rowH = m.RowHeight * 2 / 3;
+
+                        // 右侧两个按钮固定宽度，列表占掉剩下的部分。
+                        var buttonWidth = m.CardWidth * 3 / 5;
+                        var buttonHeight = m.ToggleHeight + 12;
+                        var listRight = right - buttonWidth - m.CardGap;
+
+                        // 列表至少能放下 6 行，少于这个数看起来像个输入框而不是列表。
+                        var visibleRows = Math.Max(6, appList.Apps.Count);
+                        var listHeight = (rowH * visibleRows) + (pad * 2);
+
+                        var listBox = new PixelRect(left, y, listRight, y + listHeight);
+
+                        var rects = new List<PixelRect>(appList.Apps.Count + 2);
+
+                        for (var i = 0; i < appList.Apps.Count; i++)
+                        {
+                            rects.Add(new PixelRect(
+                                listBox.Left + pad,
+                                listBox.Top + pad + (i * rowH),
+                                listBox.Right - pad,
+                                listBox.Top + pad + ((i + 1) * rowH)));
+                        }
+
+                        // 两个按钮接在行矩形之后，命中时按序号区分。
+                        rects.Add(PixelRect.FromSize(listRight + m.CardGap, y, buttonWidth, buttonHeight));
+                        rects.Add(PixelRect.FromSize(
+                            listRight + m.CardGap, y + buttonHeight + m.RowGap, buttonWidth, buttonHeight));
+
+                        var bottom = y + listHeight;
+
+                        blocks.Add(new BlockLayout(
+                            block,
+                            new PixelRect(left, blockTop, right, bottom),
+                            listBox,
+                            PixelRect.Empty,
+                            PixelRect.Empty,
+                            rects));
+
+                        y = bottom + m.RowGap;
+                        break;
+                    }
+
                 case SwatchBlock swatch:
                     {
                         var blockTop = y;
@@ -435,6 +482,36 @@ public sealed record ContentLayout
     {
         foreach (var b in Blocks)
         {
+            if (b.Block is AppListBlock apps)
+            {
+                for (var i = 0; i < b.Options.Count; i++)
+                {
+                    if (!b.Options[i].Contains(point))
+                    {
+                        continue;
+                    }
+
+                    // 前 Apps.Count 个是列表行，最后两个是加入/移出按钮。
+                    if (i < apps.Apps.Count)
+                    {
+                        return (SettingAction.SelectApp, i);
+                    }
+
+                    var button = i - apps.Apps.Count;
+
+                    return button switch
+                    {
+                        0 => (SettingAction.AddApp, 0),
+
+                        // 没有选中项时移出按钮是灰的，点它不该有任何反应。
+                        1 when apps.SelectedIndex >= 0 => (SettingAction.RemoveApp, 0),
+                        _ => null,
+                    };
+                }
+
+                continue;
+            }
+
             if (b.Block is not ListBlock list)
             {
                 continue;

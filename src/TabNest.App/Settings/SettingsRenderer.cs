@@ -165,6 +165,10 @@ internal static class SettingsRenderer
                     PaintList(c, s, b, list, view.Left, dy);
                     break;
 
+                case AppListBlock appList:
+                    PaintAppList(c, s, b, appList, view.Left, dy);
+                    break;
+
                 case SwatchBlock swatch:
                     PaintSwatches(c, s, b, swatch, view.Left, dy);
                     break;
@@ -422,6 +426,81 @@ internal static class SettingsRenderer
             c.DrawStyledText(
                 list.Buttons[i].Text, rect,
                 hovered ? t.AccentText : t.Text,
+                TextStyle.Body, s.Dpi, TextAlign.Center);
+        }
+    }
+
+    /// <summary>画应用清单：带边框的列表 + 右侧「加入列表」「移出列表」。</summary>
+    private static void PaintAppList(
+        GdiCanvas c, SettingsRenderState s, BlockLayout b, AppListBlock list, int ox, int oy)
+    {
+        var t = s.Theme;
+        var m = s.Metrics;
+        var box = Offset(b.TitleBounds, ox, oy);
+
+        c.FillRoundRect(box, t.CardBackground, m.CornerRadius);
+        c.DrawRoundRectOutline(box, t.Border, m.CornerRadius);
+
+        if (list.Apps.Count == 0)
+        {
+            var pad = m.RowPadding;
+
+            c.DrawStyledText(
+                list.EmptyText,
+                new PixelRect(box.Left + pad, box.Top + pad, box.Right - pad, box.Bottom - pad),
+                t.TextSecondary, TextStyle.Caption, s.Dpi, wrap: true);
+        }
+
+        for (var i = 0; i < list.Apps.Count && i < b.Options.Count; i++)
+        {
+            var row = Offset(b.Options[i], ox, oy);
+            var selected = i == list.SelectedIndex;
+
+            if (selected)
+            {
+                c.FillRoundRect(row, t.Accent, m.CornerRadius / 2);
+            }
+            else if (row.Contains(s.PointerPosition))
+            {
+                c.FillRoundRect(row, t.CardHoverBackground, m.CornerRadius / 2);
+            }
+
+            c.DrawStyledText(
+                list.Apps[i],
+                new PixelRect(row.Left + (m.RowPadding / 2), row.Top, row.Right, row.Bottom),
+                selected ? t.AccentText : t.Text,
+                TextStyle.Body, s.Dpi);
+        }
+
+        // 两个按钮接在行矩形之后。
+        var buttons = new[] { "加入列表", "移出列表" };
+
+        for (var i = 0; i < buttons.Length; i++)
+        {
+            var index = list.Apps.Count + i;
+
+            if (index >= b.Options.Count)
+            {
+                break;
+            }
+
+            var rect = Offset(b.Options[index], ox, oy);
+
+            // 没有选中项时「移出列表」必须灰显 —— 一个点了没反应的按钮
+            // 比一个明确告诉你"现在不能点"的按钮更让人困惑。
+            var enabled = i == 0 || list.SelectedIndex >= 0;
+            var hovered = enabled && rect.Contains(s.PointerPosition);
+
+            c.FillRoundRect(
+                rect,
+                hovered ? t.Accent : t.CardBackground,
+                m.CornerRadius);
+
+            c.DrawRoundRectOutline(rect, t.Border, m.CornerRadius);
+
+            c.DrawStyledText(
+                buttons[i], rect,
+                !enabled ? t.TextDisabled : hovered ? t.AccentText : t.Text,
                 TextStyle.Body, s.Dpi, TextAlign.Center);
         }
     }

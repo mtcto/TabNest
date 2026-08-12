@@ -1520,6 +1520,20 @@ internal sealed class Orchestrator : IDisposable
             return 0;
         }
 
+        // **必须校验基准窗口自身的资格。**
+        //
+        // BatchAdoption.Plan 对基准窗口是无条件收编的 —— 从分组栏菜单进来时这没问题，
+        // 那个基准已经是组成员，资格早就验过。但这条路径的基准是**当前前台窗口**，
+        // 焦点落在桌面上时，桌面（Progman）就成了基准，于是右键托盘会试图给桌面分组。
+        var anchorEligibility = EligibilityEvaluator.Evaluate(anchor, BuildEligibilityContext());
+
+        if (!anchorEligibility.IsEligible
+            && anchorEligibility.Reason is not IneligibleReason.AlreadyGrouped)
+        {
+            FileLog.Info($"批量收编：当前前台窗口不可分组 —— {anchorEligibility.Explanation}");
+            return 0;
+        }
+
         // 前台窗口已经在组里的话，收编到那个组，而不是另起一个。
         if (_manager.FindGroupByWindow(anchor.Identity) is { } existing)
         {
@@ -1575,6 +1589,14 @@ internal sealed class Orchestrator : IDisposable
         var anchor = _enumerator.Describe(WindowEnumerator.ForegroundWindow());
 
         if (anchor is null)
+        {
+            return [];
+        }
+
+        // 与 AdoptForegroundWindows 用同一道校验：菜单上不该出现点了会失败的项。
+        var eligibility = EligibilityEvaluator.Evaluate(anchor, BuildEligibilityContext());
+
+        if (!eligibility.IsEligible && eligibility.Reason is not IneligibleReason.AlreadyGrouped)
         {
             return [];
         }

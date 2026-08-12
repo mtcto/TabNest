@@ -250,6 +250,20 @@ internal static class QuirkTestCommand
         orchestrator.ActivateForTest(anchor.Identity.Handle);
         PumpMessages(TimeSpan.FromMilliseconds(800));
 
+        // 焦点转移在进程外不保证成功（前台锁定）。没转过去的话基准就不是我们想要的窗口，
+        // 后面的断言全都失去意义 —— 与其得到一堆莫名其妙的失败，不如明确跳过。
+        var actualForeground = WindowEnumerator.ForegroundWindow();
+
+        if (actualForeground != anchor.Identity.Handle)
+        {
+            Console.WriteLine(
+                $"[跳过] 未能把 Harness 窗口切到前台（当前前台是"
+                + $"「{WindowEnumerator.ReadTitle(actualForeground)}」），"
+                + "本节依赖前台窗口，无法继续。");
+
+            return failures;
+        }
+
         var scopes = orchestrator.DescribeForegroundAdoption();
 
         failures += Check(

@@ -345,13 +345,6 @@ public static class SettingsPages
                 Description = "资源管理器、记事本等自带标签的应用不参与分组，避免出现双重标签栏。",
                 Value = s.Grouping.YieldToNativeTabs,
             },
-            new ToggleBlock
-            {
-                Id = SettingId.AllowListOnly,
-                Title = "仅允许指定的应用分组",
-                Description = "开启后只有在规则页中明确允许的应用才能分组。",
-                Value = s.Grouping.AllowListOnly,
-            },
         ],
     };
 
@@ -360,12 +353,11 @@ public static class SettingsPages
 
     private static PageContent Rules(AppSettings s)
     {
-        var ruleRows = s.Rules
-            .Select(r => (
-                Primary: $"{r.Name}（{DescribeAction(r.Action)}）"
-                    + (r.IsUsable ? string.Empty : "　⚠ 没有条件，不会生效"),
-                Secondary: DescribeConditions(r) + "　·　点击编辑，右键删除"))
-            .ToList();
+        var apps = TabNest.Core.Rules.AppList.Apps(s);
+        var allowListOnly = s.Grouping.AllowListOnly;
+
+        // 不在应用清单里管理的规则（用户手工写的复杂匹配）单独计数并提示。
+        var customRuleCount = s.Rules.Count(r => !TabNest.Core.Rules.AppList.IsManaged(r));
 
         var hotkeyRows = s.Hotkeys.Bindings
             .Select(b => (
@@ -426,73 +418,53 @@ public static class SettingsPages
 
             new SectionBlock
             {
-                Title = "自定义规则",
-                Description = "按进程名、窗口类与标题的组合决定某个窗口能否分组。"
-                    + "优先级固定为：阻止 > 允许 > 自动分组。",
+                Title = "阻止/允许应用",
+                Description = allowListOnly
+                    ? "下列应用**才能**参与分组，其余一律不能。"
+                    : "下列应用**不参与**分组，其余照常。",
             },
-            new ListBlock
+            new AppListBlock
             {
-                Title = "当前规则",
-                Items = ruleRows,
-                EmptyText = "还没有任何规则。点下面的「新建规则」开始添加。",
-                ItemAction = SettingAction.EditRule,
-                Buttons = [(SettingAction.AddRule, "新建规则")],
+                Apps = apps,
+                SelectedIndex = SelectedAppIndex,
+                EmptyText = allowListOnly
+                    ? "列表为空，且已勾选「仅允许指定应用」—— 当前没有任何应用能分组。"
+                    : "列表为空，所有应用都可以分组。点「加入列表」添加要排除的应用。",
             },
-            new InfoBlock
+            new ToggleBlock
             {
-                Text = "阻止规则的优先级最高且不可调整。这是有意的：阻止表达的是"
-                    + "「我不要这个应用被碰」，属于安全边界。若允许规则能盖过它，"
-                    + "用户就无法可靠地把密码管理器、银行客户端这类应用排除在外。",
+                Id = SettingId.AllowListOnly,
+                Title = "仅允许指定应用在组中",
+                Description = "勾选后上面的列表变成允许清单：只有列表里的应用能参与分组。"
+                    + "不勾选时它是阻止清单：列表里的应用不参与分组。",
+                Value = allowListOnly,
             },
         ]);
+
+        if (customRuleCount > 0)
+        {
+            // 手工写进 settings.json 的复杂规则不在上面的列表里管理，
+            // 但必须让用户知道它们存在 —— 否则会出现"列表是空的，某个窗口却分不了组"
+            // 这种完全无从解释的现象。
+            blocks.Add(new InfoBlock
+            {
+                Text = $"另有 {customRuleCount} 条自定义规则在 settings.json 中手工配置"
+                    + "（按窗口类或标题匹配）。它们照常生效，但不在上面的列表里管理 ——"
+                    + "把它们显示成一个光秃秃的进程名会掩盖真正的匹配条件，改一下就毁了。",
+            });
+        }
 
         return new PageContent
         {
             Page = SettingsPage.Rules,
             Title = "分组规则",
-            Subtitle = "热键、已保存分组与自定义匹配规则。",
+            Subtitle = "热键、已保存分组与应用清单。",
             Blocks = blocks,
         };
     }
 
-    private static string DescribeAction(TabNest.Core.Rules.RuleAction action) => action switch
-    {
-        TabNest.Core.Rules.RuleAction.Block => "阻止分组",
-        TabNest.Core.Rules.RuleAction.Allow => "允许分组",
-        _ => "自动分组",
-    };
-
-    private static string DescribeConditions(TabNest.Core.Rules.Rule rule)
-    {
-        if (rule.Conditions.Count == 0)
-        {
-            return "没有任何条件，该规则不会生效。";
-        }
-
-        var parts = rule.Conditions.Select(c =>
-        {
-            var fields = new List<string>(3);
-
-            if (!string.IsNullOrWhiteSpace(c.ProcessName))
-            {
-                fields.Add($"进程 {c.ProcessName}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(c.ClassName))
-            {
-                fields.Add($"窗口类 {c.ClassName}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(c.Title))
-            {
-                fields.Add($"标题{(c.PartialMatch ? "包含" : "等于")} {c.Title}");
-            }
-
-            return fields.Count == 0 ? "匹配任意窗口" : string.Join(" 且 ", fields);
-        });
-
-        return string.Join("；或 ", parts);
-    }
+    /// <summary>应用清单当前选中的行。由宿主维护 —— 它属于界面状态而非设置。</summary>
+    public static int SelectedAppIndex { get; set; } = -1;
 
     /// <summary>各配色方案的样本色。由宿主注入实际主题值，领域层不知道具体颜色。</summary>
     public static Func<RailColorScheme, IReadOnlyList<(string Name, uint Argb)>>? SwatchProvider { get; set; }
@@ -651,10 +623,11 @@ public static class SettingsPages
             {
                 Grouping = s.Grouping with { YieldToNativeTabs = !s.Grouping.YieldToNativeTabs },
             },
-            SettingId.AllowListOnly => s with
-            {
-                Grouping = s.Grouping with { AllowListOnly = !s.Grouping.AllowListOnly },
-            },
+            // 必须走 AppList.SetAllowListOnly：这个开关决定的是**上面那份列表的含义**，
+            // 勾上是允许清单、不勾是阻止清单。只改开关不改清单里各条规则的动作，
+            // 会让同一批应用在两种模式下表达完全相反的意思，而界面上看不出任何差别。
+            SettingId.AllowListOnly =>
+                TabNest.Core.Rules.AppList.SetAllowListOnly(s, !s.Grouping.AllowListOnly),
             SettingId.AutoGroupIdenticalWindows => s with
             {
                 Grouping = s.Grouping with
