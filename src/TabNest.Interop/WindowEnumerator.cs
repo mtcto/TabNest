@@ -249,6 +249,39 @@ public sealed class WindowEnumerator(ProcessInspector processes)
     }
 
     /// <summary>
+    /// 当前前台窗口，即用户正在操作的窗口。
+    ///
+    /// 编排层用它判定"这次位置变化是不是用户的意图"：组成员被我们对齐后
+    /// 会回报自己的新位置，若把这类回声也当成用户意图，就会形成
+    /// "对齐 → 回声 → 再对齐"的回环。
+    /// </summary>
+    public static nint ForegroundWindow() => User32.GetForegroundWindow();
+
+    /// <summary>
+    /// 窗口是否仍是一个"活着且用户能看到"的顶层窗口。
+    ///
+    /// 用于判定组成员是否已经消失。刻意**把最小化算作还活着**：
+    /// 最小化是用户随时会还原的临时状态，把它当作退组会让用户最小化一下
+    /// 再还原就发现窗口被踢出了分组。
+    ///
+    /// 而被关闭的窗口无论销毁还是隐藏，都不会再满足 IsWindowVisible。
+    /// </summary>
+    public static bool IsAliveAndVisible(nint hwnd)
+    {
+        if (hwnd == 0 || !User32.IsWindow(hwnd))
+        {
+            return false;
+        }
+
+        if (User32.IsIconic(hwnd))
+        {
+            return true;
+        }
+
+        return User32.IsWindowVisible(hwnd) && !IsCloaked(hwnd);
+    }
+
+    /// <summary>
     /// 目标窗口顶部的圆角半径（物理像素）。0 表示直角。
     ///
     /// 分组条要和窗口无缝衔接，圆角就必须跟着窗口走，不能写死：

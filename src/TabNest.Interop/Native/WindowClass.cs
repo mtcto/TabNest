@@ -37,7 +37,12 @@ internal static partial class WindowClass
     public const uint WM_RBUTTONUP = 0x0205;
     public const uint WM_MBUTTONUP = 0x0208;
     public const uint WM_CAPTURECHANGED = 0x0215;
+    public const uint WM_MOUSEWHEEL = 0x020A;
     public const uint WM_MOUSELEAVE = 0x02A3;
+    public const uint WM_SIZE = 0x0005;
+    public const uint WM_GETMINMAXINFO = 0x0024;
+    public const uint WM_KEYDOWN = 0x0100;
+    public const uint WM_SETTINGCHANGE = 0x001A;
     public const uint WM_DPICHANGED = 0x02E0;
     public const uint WM_DISPLAYCHANGE = 0x007E;
     public const uint WM_APP = 0x8000;
@@ -133,4 +138,14 @@ internal static partial class WindowClass
     [LibraryImport(Lib, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool SetForegroundWindow(nint hWnd);
+
+    [LibraryImport(Lib, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GetClientRect(nint hWnd, out RECT lpRect);
+
+    [LibraryImport(Lib, SetLastError = true)]
+    public static partial nint GetDC(nint hWnd);
+
+    [LibraryImport(Lib)]
+    public static partial int ReleaseDC(nint hWnd, nint hDC);
 }

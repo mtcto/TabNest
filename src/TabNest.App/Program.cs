@@ -32,6 +32,8 @@ internal static class Program
             RunKind.Watch => Diagnostics.WatchCommand.Run(mode),
             RunKind.RailTest => Diagnostics.RailTestCommand.Run(mode),
             RunKind.GroupTest => Diagnostics.GroupTestCommand.Run(mode),
+            RunKind.SettingsTest => Diagnostics.SettingsTestCommand.Run(mode),
+            RunKind.QuirkTest => Diagnostics.QuirkTestCommand.Run(mode),
             _ => RunInteractive(mode),
         };
     }
@@ -53,6 +55,8 @@ internal static class Program
               TabNest --benchmark    自测性能指标并与基准对比（无 UI）
               TabNest --watch        实时监视窗口事件与拖放判定（无 UI）
               TabNest --selftest     用 Harness 测试窗口跑完整分组闭环（无 UI）
+              TabNest --settingstest 校验设置中心的布局、命中与写回接线
+              TabNest --quirktest    复现固定尺寸与关闭即隐藏两类窗口的回归场景
               TabNest --version      显示版本
               TabNest --help         显示本帮助
 

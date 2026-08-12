@@ -141,11 +141,15 @@ internal static partial class Gdi
 
     public const uint DT_LEFT = 0x00000000;
     public const uint DT_CENTER = 0x00000001;
+    public const uint DT_RIGHT = 0x00000002;
     public const uint DT_VCENTER = 0x00000004;
+    public const uint DT_WORDBREAK = 0x00000010;
     public const uint DT_SINGLELINE = 0x00000020;
+    public const uint DT_CALCRECT = 0x00000400;
     public const uint DT_END_ELLIPSIS = 0x00008000;
     public const uint DT_PATH_ELLIPSIS = 0x00004000;
     public const uint DT_NOPREFIX = 0x00000800;
+    public const uint DT_EDITCONTROL = 0x00002000;
 
     public const int TRANSPARENT = 1;
 
@@ -162,6 +166,27 @@ internal static partial class Gdi
 
     [LibraryImport(Gdi32, EntryPoint = "CreateFontIndirectW", SetLastError = true)]
     public static partial nint CreateFontIndirect(ref LOGFONT lplf);
+
+    /// <summary>把字体应用到 Win32 原生控件。原生控件默认用系统位图字体，不设就是 90 年代长相。</summary>
+    public const uint WM_SETFONT = 0x0030;
+
+    // ---- 裁剪区 ----
+    //
+    // 设置中心的内容区可滚动，绘制必须被限制在视口内，
+    // 否则滚动到一半的卡片会画到导航栏和标题上去。
+
+    [LibraryImport(Gdi32, SetLastError = true)]
+    public static partial int IntersectClipRect(nint hdc, int left, int top, int right, int bottom);
+
+    [LibraryImport(Gdi32, SetLastError = true)]
+    public static partial int SelectClipRgn(nint hdc, nint hrgn);
+
+    [LibraryImport(Gdi32, SetLastError = true)]
+    public static partial int SaveDC(nint hdc);
+
+    [LibraryImport(Gdi32, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool RestoreDC(nint hdc, int nSavedDC);
 
     // ---- 图标 ----
 

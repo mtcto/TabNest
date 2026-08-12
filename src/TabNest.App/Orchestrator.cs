@@ -132,6 +132,17 @@ internal sealed class Orchestrator : IDisposable
                 OnWindowDestroyed(evt.Handle);
                 break;
 
+            // 隐藏与 cloak 都要当作"窗口从组里消失"处理。
+            //
+            // 早期只处理了 Destroyed，结果 Electron 类应用（Claude、Codex、VS Code）
+            // 关闭窗口时只是隐藏而非销毁，永远等不到销毁事件：
+            // 窗口不见了，分组栏和标签却一直留着，再从标签拆分还会把一个
+            // 已经"关掉"的窗口重新显示出来，而它已不再响应任何输入。
+            case WindowEventKind.Hidden:
+            case WindowEventKind.Cloaked:
+                OnWindowVanished(evt.Handle);
+                break;
+
             case WindowEventKind.NameChanged:
                 OnTitleChanged(evt.Handle);
                 break;
@@ -181,6 +192,72 @@ internal sealed class Orchestrator : IDisposable
         // 幽灵标签的来源就是这里漏处理：窗口没了但标签还在。
         var result = _manager.OnWindowDestroyed(tab.Identity);
         Apply(result, group.Id);
+    }
+
+    /// <summary>
+    /// 组成员被隐藏或 cloak。
+    ///
+    /// 与销毁不同，隐藏是可逆的：最小化到托盘、切换虚拟桌面、应用自己临时藏一下
+    /// 都会走到这里。因此**不能一见隐藏就退组** —— 那会让用户切个虚拟桌面回来发现组没了。
+    ///
+    /// 判据是"窗口是否还是一个可见的顶层窗口"：真正被关掉的窗口回不到可见状态，
+    /// 而最小化的窗口 IsWindowVisible 仍为 true（最小化不改变可见性标志）。
+    /// </summary>
+    private void OnWindowVanished(nint hwnd)
+    {
+        var group = FindGroupByHandle(hwnd);
+        if (group is null)
+        {
+            return;
+        }
+
+        var tab = FindTabByHandle(group, hwnd);
+        if (tab is null)
+        {
+            return;
+        }
+
+        if (WindowEnumerator.IsAliveAndVisible(hwnd))
+        {
+            return;
+        }
+
+        FileLog.Info($"成员窗口已消失（隐藏或销毁），移出分组：{DescribeWindow(hwnd)}");
+        Apply(_manager.OnWindowDestroyed(tab.Identity), group.Id);
+    }
+
+    /// <summary>
+    /// 核验一个组里的成员是否都还在，把已经消失的清理掉。
+    ///
+    /// 关闭请求发出后不一定有事件回来：应用可能直接隐藏窗口而不销毁，
+    /// 也可能整个进程被强杀导致事件丢失。没有这道兜底，分组栏会留在屏幕上
+    /// 指向一批已经不存在的窗口。
+    /// </summary>
+    private void SweepVanishedMembers(string groupId)
+    {
+        var group = _manager.FindGroup(groupId);
+        if (group is null)
+        {
+            return;
+        }
+
+        foreach (var tab in group.LiveTabs.ToList())
+        {
+            if (WindowEnumerator.IsAliveAndVisible(tab.Identity.Handle))
+            {
+                continue;
+            }
+
+            FileLog.Info($"清理已消失的成员：{tab.Title}");
+
+            var result = _manager.OnWindowDestroyed(tab.Identity);
+            Apply(result, groupId);
+
+            if (result.Group is null)
+            {
+                return;
+            }
+        }
     }
 
     private void OnTitleChanged(nint hwnd)
@@ -260,6 +337,24 @@ internal sealed class Orchestrator : IDisposable
             return;
         }
 
+        // 只有用户正在操作的那个窗口才有资格改变整组的位置与大小。
+        //
+        // 早期是"任何成员的位置变化都同步整组"，这在成员窗口有自身尺寸约束时
+        // 会形成致命回环：把一个有最大宽度限制的小窗口对齐到大矩形，系统会把它
+        // 夹回小尺寸，它随即上报这个被夹过的矩形，我们又拿它当成"用户改了大小"
+        // 去同步整组 —— 于是大窗口被拉成小窗口。用户再怎么拉宽大窗口，
+        // 松手后都会被小窗口的回声拽回去，表现为"这个窗口的宽度改不了了"。
+        //
+        // 前台窗口即用户正在操作的窗口，用它当判据既简单又准确：
+        // 被夹回尺寸的那个窗口不是前台，它的回声自然被忽略，回环断开。
+        if (memberHandle != WindowEnumerator.ForegroundWindow())
+        {
+            // 仍要刷新分组栏：本次事件可能正是"对齐终于落实"的那一下，
+            // 而分组栏还停在对齐之前的旧尺寸上。
+            RefreshRail(group);
+            return;
+        }
+
         // 拖动路径上的耗时埋点。
         //
         // 这条路径每秒执行几十次，任何一步阻塞都会直接表现为拖动卡顿，
@@ -272,6 +367,13 @@ internal sealed class Orchestrator : IDisposable
         // 容忍一两像素的抖动，否则会陷入"对齐 → 触发事件 → 再对齐"的自激循环。
         if (bounds.IsEmpty || Near(bounds, group.Bounds, tolerance: 2))
         {
+            // 即便组矩形没变也要刷新分组栏。
+            //
+            // 分组刚建立时窗口对齐是异步投递的，RefreshRail 当时读到的还是对齐前的
+            // 旧矩形，分组栏因此比窗口宽出一大截；等窗口真正移动过来，这里的
+            // Near 判定成立又直接返回，分组栏就永远停在错误宽度上 ——
+            // 用户看到的是"必须点一下分组栏它才会缩到正确宽度"。
+            RefreshRail(group);
             ReportSlowFrame(watch, afterRead, 0, 0);
             return;
         }
@@ -839,6 +941,17 @@ internal sealed class Orchestrator : IDisposable
     /// <summary>测试入口：当前所有组。</summary>
     internal IReadOnlyCollection<GroupSession> GroupsForTest => _manager.Groups;
 
+    /// <summary>测试入口：模拟点击分组栏上的「关闭整组」按钮，走完整生产路径。</summary>
+    internal void CloseGroupForTest(string groupId) =>
+        OnRailInteraction(new Rail.RailInteraction
+        {
+            GroupId = groupId,
+            Action = Rail.RailAction.CloseGroup,
+        });
+
+    /// <summary>测试入口：模拟某个成员上报了位置变化。</summary>
+    internal void NotifyLocationForTest(nint hwnd) => OnLocationChanged(hwnd);
+
     /// <summary>把 <paramref name="draggedHandle"/> 合并到 <paramref name="targetHandle"/> 所在的组。</summary>
     private void TryMerge(nint draggedHandle, nint targetHandle)
     {
@@ -967,6 +1080,40 @@ internal sealed class Orchestrator : IDisposable
         if (result is not null)
         {
             Apply(result, groupId);
+        }
+
+        // 关闭是"请求"而非"结果"：应用可以拒绝、可以弹保存提示，
+        // 也可能只是把窗口藏起来而不销毁（Electron 应用的常见做法）。
+        // 因此关闭之后必须主动回头核验，不能守着销毁事件干等 ——
+        // 等不到的话分组栏会一直指向一批已经不存在的窗口。
+        if (interaction.Action is RailAction.CloseGroup or RailAction.CloseTab)
+        {
+            ScheduleSweep(groupId);
+        }
+    }
+
+    /// <summary>
+    /// 稍后核验一次组成员是否都还在。
+    ///
+    /// 延迟是必须的：关闭指令刚投递出去，应用还没来得及响应，
+    /// 立刻核验只会看到窗口都还在。两次核验覆盖"立即关闭"与"弹框确认后关闭"两种节奏。
+    /// </summary>
+    private void ScheduleSweep(string groupId)
+    {
+        foreach (var delayMs in (int[])[400, 1500])
+        {
+            _ = Task.Delay(delayMs, _shutdown.Token).ContinueWith(
+                _ =>
+                {
+                    if (!_disposed)
+                    {
+                        // 组状态只能在 UI 线程上改动，必须投回去。
+                        _dispatcher.Post(() => SweepVanishedMembers(groupId));
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnRanToCompletion,
+                TaskScheduler.Default);
         }
     }
 
@@ -1284,6 +1431,57 @@ internal sealed class Orchestrator : IDisposable
         if (!enabled)
         {
             DissolveEverything();
+        }
+    }
+
+    /// <summary>
+    /// 整份替换设置。设置中心一次可能改任意字段，因此不逐项开接口。
+    ///
+    /// 逐字段比对出真正变化的部分，只对受影响的子系统做重建 ——
+    /// 无脑全量重建会让改一个无关开关也把所有分组栏闪一遍。
+    /// </summary>
+    public void ApplySettings(AppSettings updated)
+    {
+        ArgumentNullException.ThrowIfNull(updated);
+
+        var previous = _settings;
+        if (previous == updated)
+        {
+            return;
+        }
+
+        _settings = updated;
+        _manager.TaskbarPolicy = updated.TaskbarButtons;
+        SaveSettings();
+
+        // 主开关关闭要拆散一切，且后续的重建都没有意义，直接返回。
+        if (previous.Enabled && !updated.Enabled)
+        {
+            FileLog.Info("主开关已关闭，拆散全部分组。");
+            DissolveEverything();
+            return;
+        }
+
+        if (previous.TaskbarButtons != updated.TaskbarButtons)
+        {
+            ApplyTaskbarPolicyToAllGroups();
+        }
+
+        // 外观改动只需重画分组栏。
+        if (previous.Appearance != updated.Appearance)
+        {
+            foreach (var group in _manager.Groups.ToList())
+            {
+                RefreshRail(group);
+            }
+        }
+    }
+
+    private void ApplyTaskbarPolicyToAllGroups()
+    {
+        foreach (var group in _manager.Groups.ToList())
+        {
+            RefreshRail(group);
         }
     }
 

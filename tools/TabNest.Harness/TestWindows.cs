@@ -133,6 +133,59 @@ internal static class TestWindows
             Brushes.Gray,
             "WS_EX_TOOLWINDOW 且无标题。\n应被基础过滤排除，不出现在候选列表里。");
 
+    /// <summary>
+    /// 有最大尺寸限制的小窗口。
+    ///
+    /// 复现一类真实缺陷：把这种窗口和一个大窗口分到一组时，我们把它对齐到大矩形，
+    /// 系统会按 MaxWidth/MaxHeight 把它夹回小尺寸，它随即上报这个被夹过的矩形。
+    /// 若编排层把这份回声当成"用户改了大小"去同步整组，大窗口就会被拉成小窗口，
+    /// 而且用户再怎么拉宽都会被拽回去 —— 表现为"这个窗口的宽度改不了了"。
+    ///
+    /// OpenVPN Connect、各类登录框与设置面板都是这种窗口。
+    /// </summary>
+    public static Window CreateFixedSize()
+    {
+        var window = Decorate(
+            new Window { ResizeMode = ResizeMode.CanMinimize },
+            "固定尺寸窗口",
+            Brushes.DarkOrange,
+            "MaxWidth/MaxHeight 已锁死，无法被放大。\n"
+            + "与大窗口分组后，大窗口必须保持自己的尺寸，且仍可自由调整 ——\n"
+            + "本窗口被夹回小尺寸后上报的位置属于回声，不该驱动整组。");
+
+        window.Width = 320;
+        window.Height = 220;
+        window.MaxWidth = 320;
+        window.MaxHeight = 220;
+        window.MinWidth = 320;
+        window.MinHeight = 220;
+
+        return window;
+    }
+
+    /// <summary>
+    /// 关闭时只隐藏、不销毁的窗口。
+    ///
+    /// 复现另一类真实缺陷：Electron 应用（Claude、Codex、VS Code）关闭窗口时
+    /// 往往只是隐藏，永远不发销毁事件。若编排层只处理销毁事件，
+    /// 窗口消失了而标签和分组栏还留着，再从标签拆分还会把这个已经"关掉"的窗口
+    /// 重新显示出来，而它已不再响应任何输入。
+    /// </summary>
+    public static Window CreateHideOnClose()
+    {
+        var window = Decorate(new Window(), "关闭即隐藏", Brushes.Teal,
+            "关闭时只隐藏窗口而不销毁，永远不会发出销毁事件。\n"
+            + "TabNest 必须据此把它移出分组，而不是留下一个指向隐形窗口的标签。");
+
+        window.Closing += (_, e) =>
+        {
+            e.Cancel = true;
+            window.Hide();
+        };
+
+        return window;
+    }
+
     private static Window Decorate(Window window, string label, Brush accent, string description)
     {
         var index = Interlocked.Increment(ref _counter);

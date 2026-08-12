@@ -20,10 +20,18 @@ internal sealed class InteractiveHost : IDisposable
     private const uint MenuDissolveAll = 4;
     private const uint MenuOpenDataFolder = 5;
     private const uint MenuExit = 6;
+    private const uint MenuSettings = 7;
 
     private readonly UiDispatcher _dispatcher;
     private readonly Orchestrator _orchestrator;
     private readonly TrayIcon _tray;
+
+    /// <summary>
+    /// 设置窗口按需创建。用户不打开设置，这段代码就一次都不执行，
+    /// 常驻内存里也不会有它的任何痕迹。
+    /// </summary>
+    private Settings.SettingsWindow? _settingsWindow;
+
     private bool _disposed;
 
     private InteractiveHost()
@@ -122,6 +130,9 @@ internal sealed class InteractiveHost : IDisposable
                 MenuDissolveAll,
                 groups > 0 ? $"拆散全部标签组（{groups} 组）" : "拆散全部标签组",
                 Enabled: groups > 0),
+            TrayMenuItem.Separator,
+
+            new TrayMenuItem(MenuSettings, "设置…"),
             new TrayMenuItem(MenuOpenDataFolder, "打开数据目录"),
             TrayMenuItem.Separator,
 
@@ -151,6 +162,10 @@ internal sealed class InteractiveHost : IDisposable
                 UpdateTrayTooltip();
                 break;
 
+            case MenuSettings:
+                OpenSettings();
+                break;
+
             case MenuOpenDataFolder:
                 OpenDataFolder();
                 break;
@@ -162,6 +177,44 @@ internal sealed class InteractiveHost : IDisposable
             default:
                 break;
         }
+    }
+
+    /// <summary>
+    /// 打开设置中心。
+    ///
+    /// 窗口只创建一次，关闭时隐藏而非销毁 —— 设置会被反复打开，
+    /// 每次重建既慢又会丢掉用户当前所在的页面与滚动位置。
+    /// </summary>
+    private void OpenSettings()
+    {
+        try
+        {
+            if (_settingsWindow is null || !_settingsWindow.IsCreated)
+            {
+                _settingsWindow = new Settings.SettingsWindow(
+                    _orchestrator.Settings,
+                    OnSettingsChanged);
+            }
+            else
+            {
+                // 已存在的窗口要同步一次：托盘菜单也能改主开关和任务栏策略，
+                // 不同步的话打开后看到的是过期状态。
+                _settingsWindow.UpdateSettings(_orchestrator.Settings);
+            }
+
+            _settingsWindow.ShowAndActivate();
+        }
+        catch (Exception ex)
+        {
+            // 设置窗口打不开绝不能拖垮常驻进程 —— 用户还要靠托盘退出。
+            FileLog.Error("打开设置中心失败。", ex);
+        }
+    }
+
+    private void OnSettingsChanged(Settings.SettingsChanged change)
+    {
+        _orchestrator.ApplySettings(change.Settings);
+        UpdateTrayTooltip();
     }
 
     private void UpdateTrayTooltip()
@@ -204,6 +257,7 @@ internal sealed class InteractiveHost : IDisposable
 
         // Orchestrator 的 Dispose 里会再次还原窗口并卸载 hook，
         // 即使进程是被异常路径拖到这里的，外部窗口也不会留在被接管的状态。
+        _settingsWindow?.Dispose();
         _orchestrator.Dispose();
         _tray.Dispose();
         _dispatcher.Dispose();

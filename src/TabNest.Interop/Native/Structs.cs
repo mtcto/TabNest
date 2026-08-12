@@ -31,6 +31,17 @@ internal struct POINT
     public readonly PixelPoint ToPixelPoint() => new(X, Y);
 }
 
+/// <summary>WM_GETMINMAXINFO 的载荷。用于给可缩放窗口设最小尺寸。</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct MINMAXINFO
+{
+    public POINT ptReserved;
+    public POINT ptMaxSize;
+    public POINT ptMaxPosition;
+    public POINT ptMinTrackSize;
+    public POINT ptMaxTrackSize;
+}
+
 [StructLayout(LayoutKind.Sequential)]
 internal struct WINDOWPLACEMENT
 {

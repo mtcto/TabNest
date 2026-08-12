@@ -1,0 +1,470 @@
+using TabNest.Core.Layout;
+using TabNest.Core.Models;
+using TabNest.Interop;
+
+namespace TabNest.App.Settings;
+
+/// <summary>绘制一帧设置中心所需的全部状态。不可变。</summary>
+public sealed record SettingsRenderState
+{
+    public required SettingsLayout Layout { get; init; }
+    public required ContentLayout Content { get; init; }
+    public required PageContent Page { get; init; }
+    public required SettingsTheme Theme { get; init; }
+    public required SettingsMetrics Metrics { get; init; }
+    public required int Dpi { get; init; }
+    public required int ScrollOffset { get; init; }
+
+    public SettingsPage? HoveredNav { get; init; }
+
+    /// <summary>光标下的开关，用于悬停高亮。</summary>
+    public SettingId HoveredToggle { get; init; }
+
+    /// <summary>光标下的卡片，格式为「块序号:选项序号」。</summary>
+    public (int Block, int Option)? HoveredCard { get; init; }
+}
+
+/// <summary>
+/// 设置中心的绘制。
+///
+/// 全部矢量绘制，零位图资源。Groupy 用 6.6MB 的位图皮肤画同样的图示卡片，
+/// 代价是 150% 缩放下发糊；矢量绘制体积为零且任何 DPI 下都清晰。
+/// </summary>
+internal static class SettingsRenderer
+{
+    public static void Paint(nint hwnd, SettingsRenderState s)
+    {
+        var w = s.Layout.Bounds.Width;
+        var h = s.Layout.Bounds.Height;
+
+        using var paint = BufferedPaint.Begin(hwnd, w, h);
+        if (paint is null)
+        {
+            return;
+        }
+
+        var c = paint.Canvas;
+        var t = s.Theme;
+
+        c.FillRect(s.Layout.Bounds, t.WindowBackground);
+
+        PaintNav(c, s);
+        PaintContent(c, s);
+        PaintScrollBar(c, s);
+    }
+
+    // ------------------------------------------------------------------
+    // 导航栏
+    // ------------------------------------------------------------------
+
+    private static void PaintNav(GdiCanvas c, SettingsRenderState s)
+    {
+        var t = s.Theme;
+        c.FillRect(s.Layout.NavBounds, t.NavBackground);
+
+        foreach (var item in s.Layout.NavItems)
+        {
+            var selected = item.Page == s.Page.Page;
+            var hovered = s.HoveredNav == item.Page;
+
+            if (selected)
+            {
+                c.FillRect(item.Bounds, t.NavItemSelected);
+                c.FillRect(item.IndicatorBounds, t.NavIndicator);
+            }
+            else if (hovered)
+            {
+                c.FillRect(item.Bounds, t.NavItemHover);
+            }
+
+            c.DrawStyledText(
+                SettingsPages.TitleOf(item.Page),
+                item.TextBounds,
+                t.Text,
+                selected ? TextStyle.BodyStrong : TextStyle.Body,
+                s.Dpi);
+        }
+
+        // 导航栏与内容区之间的分界。只画一条竖线，不加阴影 ——
+        // 阴影在暗色主题下几乎不可见，反而是纯色线两种主题都成立。
+        c.FillRect(
+            new PixelRect(
+                s.Layout.NavBounds.Right - 1,
+                s.Layout.NavBounds.Top,
+                s.Layout.NavBounds.Right,
+                s.Layout.NavBounds.Bottom),
+            t.Border);
+    }
+
+    // ------------------------------------------------------------------
+    // 内容
+    // ------------------------------------------------------------------
+
+    private static void PaintContent(GdiCanvas c, SettingsRenderState s)
+    {
+        var view = s.Layout.ContentBounds;
+        if (view.IsEmpty)
+        {
+            return;
+        }
+
+        // 裁剪到视口：滚动时超出的内容必须被切掉，否则会画到导航栏上。
+        using var clip = c.PushClip(view);
+
+        var t = s.Theme;
+        var m = s.Metrics;
+        var dy = view.Top - s.ScrollOffset;
+
+        c.DrawStyledText(
+            s.Page.Title, Offset(s.Content.TitleBounds, view.Left, dy),
+            t.Text, TextStyle.PageTitle, s.Dpi);
+
+        if (!s.Content.SubtitleBounds.IsEmpty)
+        {
+            c.DrawStyledText(
+                s.Page.Subtitle!, Offset(s.Content.SubtitleBounds, view.Left, dy),
+                t.TextSecondary, TextStyle.Caption, s.Dpi, wrap: true);
+        }
+
+        for (var i = 0; i < s.Content.Blocks.Count; i++)
+        {
+            var b = s.Content.Blocks[i];
+            var bounds = Offset(b.Bounds, view.Left, dy);
+
+            // 视口外的块直接跳过。长页面滚动时这能省掉大部分绘制。
+            if (bounds.Bottom < view.Top || bounds.Top > view.Bottom)
+            {
+                continue;
+            }
+
+            switch (b.Block)
+            {
+                case SectionBlock section:
+                    PaintSection(c, s, b, section, view.Left, dy);
+                    break;
+
+                case ToggleBlock toggle:
+                    PaintToggleRow(c, s, b, toggle, view.Left, dy);
+                    break;
+
+                case ChoiceBlock choice:
+                    PaintChoice(c, s, b, choice, i, view.Left, dy);
+                    break;
+
+                case InfoBlock info:
+                    PaintInfo(c, s, b, info, view.Left, dy);
+                    break;
+
+                case SeparatorBlock:
+                    c.DrawSeparator(
+                        bounds.Left, bounds.Right,
+                        bounds.Top + (bounds.Height / 2), t.Separator);
+                    break;
+
+                default:
+                    break;
+            }
+
+            _ = m;
+        }
+    }
+
+    private static void PaintSection(
+        GdiCanvas c, SettingsRenderState s, BlockLayout b, SectionBlock section, int ox, int oy)
+    {
+        c.DrawStyledText(
+            section.Title, Offset(b.TitleBounds, ox, oy),
+            s.Theme.Text, TextStyle.Section, s.Dpi);
+
+        if (!b.DescriptionBounds.IsEmpty && section.Description is not null)
+        {
+            c.DrawStyledText(
+                section.Description, Offset(b.DescriptionBounds, ox, oy),
+                s.Theme.TextSecondary, TextStyle.Caption, s.Dpi, wrap: true);
+        }
+    }
+
+    private static void PaintToggleRow(
+        GdiCanvas c, SettingsRenderState s, BlockLayout b, ToggleBlock toggle, int ox, int oy)
+    {
+        var t = s.Theme;
+        var bounds = Offset(b.Bounds, ox, oy);
+        var hovered = s.HoveredToggle == toggle.Id && toggle.IsEnabled;
+
+        c.FillRoundRect(
+            bounds,
+            hovered ? t.CardHoverBackground : t.CardBackground,
+            s.Metrics.CornerRadius);
+
+        c.DrawStyledText(
+            toggle.Title, Offset(b.TitleBounds, ox, oy),
+            toggle.IsEnabled ? t.Text : t.TextDisabled, TextStyle.Body, s.Dpi, wrap: true);
+
+        if (!b.DescriptionBounds.IsEmpty && toggle.Description is not null)
+        {
+            c.DrawStyledText(
+                toggle.Description, Offset(b.DescriptionBounds, ox, oy),
+                t.TextSecondary, TextStyle.Caption, s.Dpi, wrap: true);
+        }
+
+        PaintToggle(c, s, Offset(b.ControlBounds, ox, oy), toggle.Value, toggle.IsEnabled);
+    }
+
+    /// <summary>画开关。胶囊轨道 + 圆钮，开时钮在右并填强调色。</summary>
+    private static void PaintToggle(
+        GdiCanvas c, SettingsRenderState s, PixelRect bounds, bool on, bool enabled)
+    {
+        var t = s.Theme;
+        var radius = bounds.Height / 2;
+
+        var track = !enabled ? t.TextDisabled : on ? t.Accent : t.ToggleOff;
+        c.FillRoundRect(bounds, track, radius);
+
+        var inset = Math.Max(2, bounds.Height / 8);
+        var knobSize = bounds.Height - (inset * 2);
+        var knobLeft = on ? bounds.Right - inset - knobSize : bounds.Left + inset;
+
+        // 圆钮用真正的椭圆填充而非圆角矩形：半径等于半边长时，
+        // 圆角矩形的四段圆弧接缝在小尺寸下看得出来，是开关上最显眼的锯齿来源。
+        c.FillCircle(
+            PixelRect.FromSize(knobLeft, bounds.Top + inset, knobSize, knobSize),
+            t.ToggleKnob);
+    }
+
+    private static void PaintChoice(
+        GdiCanvas c, SettingsRenderState s, BlockLayout b, ChoiceBlock choice, int blockIndex, int ox, int oy)
+    {
+        var t = s.Theme;
+        var m = s.Metrics;
+
+        for (var i = 0; i < b.Options.Count && i < choice.Options.Count; i++)
+        {
+            var option = choice.Options[i];
+            var card = Offset(b.Options[i], ox, oy);
+            var selected = option.Value == choice.Value;
+            var disabled = option.DisabledReason is not null;
+            var hovered = s.HoveredCard == (blockIndex, i) && !disabled;
+
+            c.FillRoundRect(
+                card,
+                hovered ? t.CardHoverBackground : t.CardBackground,
+                m.CornerRadius);
+
+            // 选中用 2px 强调色边框；未选中用 1px 常规边框。
+            // 不用背景色区分选中：图示本身占了大部分面积，改背景会让图示辨识度下降。
+            //
+            // 描边必须同样是圆角：填充是圆角却配直角描边，四个角上会露出
+            // 直线与圆弧的错位，看起来像边框有毛刺。
+            c.DrawRoundRectOutline(
+                card,
+                selected ? t.Accent : t.Border,
+                m.CornerRadius,
+                selected ? 2 : 1);
+
+            var pad = m.RowPadding;
+            var illo = PixelRect.FromSize(
+                card.Left + pad, card.Top + pad,
+                card.Width - (pad * 2), m.CardIllustrationHeight);
+
+            PaintIllustration(c, s, illo, option.Illustration, disabled);
+
+            var textTop = illo.Bottom + (pad / 2);
+            var titleColor = disabled ? t.TextDisabled : t.Text;
+
+            var titleHeight = c.MeasureTextHeight(
+                option.Title, card.Width - (pad * 2), TextStyle.BodyStrong, s.Dpi, wrap: false);
+
+            c.DrawStyledText(
+                option.Title,
+                new PixelRect(card.Left + pad, textTop, card.Right - pad, textTop + titleHeight),
+                titleColor, TextStyle.BodyStrong, s.Dpi);
+
+            // 禁用时把"为什么不可用"顶到说明位置 —— 灰掉却不解释是设置界面里最恼人的事。
+            var caption = option.DisabledReason ?? option.Description;
+
+            if (!string.IsNullOrEmpty(caption))
+            {
+                var capTop = textTop + titleHeight + 2;
+                var capBottom = card.Bottom - (pad / 2);
+
+                if (capBottom > capTop)
+                {
+                    c.DrawStyledText(
+                        caption,
+                        new PixelRect(card.Left + pad, capTop, card.Right - pad, capBottom),
+                        disabled ? t.Warning : t.TextSecondary,
+                        TextStyle.Caption, s.Dpi, wrap: true);
+                }
+            }
+        }
+    }
+
+    private static void PaintInfo(
+        GdiCanvas c, SettingsRenderState s, BlockLayout b, InfoBlock info, int ox, int oy)
+    {
+        var t = s.Theme;
+
+        c.FillRoundRect(Offset(b.Bounds, ox, oy), t.CardBackground, s.Metrics.CornerRadius);
+
+        c.DrawStyledText(
+            info.Text, Offset(b.DescriptionBounds, ox, oy),
+            info.IsWarning ? t.Warning : t.TextSecondary,
+            TextStyle.Caption, s.Dpi, wrap: true);
+    }
+
+    // ------------------------------------------------------------------
+    // 矢量图示
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// 画卡片里的示意图。
+    ///
+    /// 每个图示都是几个矩形拼出来的窗口示意，刻意保持极简：
+    /// 它要传达的是"标签在哪儿"，不是复刻真实界面。
+    /// </summary>
+    private static void PaintIllustration(
+        GdiCanvas c, SettingsRenderState s, PixelRect area, Illustration kind, bool disabled)
+    {
+        var t = s.Theme;
+        var fill = t.IllustrationFill;
+        var accent = disabled ? t.TextDisabled : t.IllustrationAccent;
+        var unit = Math.Max(3, area.Height / 8);
+
+        switch (kind)
+        {
+            case Illustration.RailAbove:
+                {
+                    // 上方一条标签栏，下面是窗口主体，两者分离。
+                    var railHeight = unit * 2;
+                    var rail = PixelRect.FromSize(area.Left, area.Top, area.Width, railHeight);
+                    c.FillRect(rail, fill);
+
+                    var tabWidth = area.Width / 3;
+                    c.FillRect(PixelRect.FromSize(area.Left, area.Top, tabWidth, railHeight), accent);
+
+                    c.FillRect(
+                        new PixelRect(area.Left, rail.Bottom + 1, area.Right, area.Bottom),
+                        fill);
+                    break;
+                }
+
+            case Illustration.IntegratedTitleBar:
+                {
+                    // 标签长在标题栏里，与窗口连成一体。
+                    var barHeight = unit * 2;
+                    c.FillRect(new PixelRect(area.Left, area.Top, area.Right, area.Bottom), fill);
+
+                    var tabWidth = area.Width / 3;
+                    c.FillRect(
+                        PixelRect.FromSize(area.Left + unit, area.Top, tabWidth, barHeight),
+                        accent);
+                    break;
+                }
+
+            case Illustration.TaskbarAll:
+                PaintTaskbar(c, area, fill, accent, buttons: 3, highlighted: 3);
+                break;
+
+            case Illustration.TaskbarActiveOnly:
+                PaintTaskbar(c, area, fill, accent, buttons: 1, highlighted: 1);
+                break;
+
+            case Illustration.TaskbarSingle:
+                PaintTaskbar(c, area, fill, accent, buttons: 1, highlighted: 1, wide: true);
+                break;
+
+            case Illustration.TabsRounded:
+                PaintTabShapes(c, s, area, fill, accent, rounded: true);
+                break;
+
+            case Illustration.TabsSquare:
+                PaintTabShapes(c, s, area, fill, accent, rounded: false);
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    private static void PaintTaskbar(
+        GdiCanvas c, PixelRect area, uint fill, uint accent,
+        int buttons, int highlighted, bool wide = false)
+    {
+        // 上半部分是窗口，下半部分是任务栏。
+        var barHeight = Math.Max(6, area.Height / 4);
+        var windowArea = new PixelRect(area.Left, area.Top, area.Right, area.Bottom - barHeight - 4);
+        c.FillRect(windowArea, fill);
+
+        var bar = new PixelRect(area.Left, area.Bottom - barHeight, area.Right, area.Bottom);
+        c.FillRect(bar, fill);
+
+        var gap = 3;
+        var count = Math.Max(1, buttons);
+        var buttonWidth = wide
+            ? area.Width / 2
+            : ((area.Width / 2) - (gap * (count - 1))) / count;
+
+        var x = area.Left + 2;
+
+        for (var i = 0; i < count; i++)
+        {
+            c.FillRect(
+                PixelRect.FromSize(x, bar.Top + 2, buttonWidth, barHeight - 4),
+                i < highlighted ? accent : fill);
+
+            x += buttonWidth + gap;
+        }
+    }
+
+    private static void PaintTabShapes(
+        GdiCanvas c, SettingsRenderState s, PixelRect area, uint fill, uint accent, bool rounded)
+    {
+        var tabHeight = Math.Max(8, area.Height / 3);
+        var tabWidth = area.Width / 3;
+        var radius = rounded ? Math.Max(2, tabHeight / 3) : 0;
+
+        var body = new PixelRect(area.Left, area.Top + tabHeight, area.Right, area.Bottom);
+        c.FillRect(body, fill);
+
+        var x = area.Left;
+
+        for (var i = 0; i < 2; i++)
+        {
+            var tab = PixelRect.FromSize(x, area.Top, tabWidth, tabHeight);
+            var color = i == 0 ? accent : fill;
+
+            if (rounded)
+            {
+                c.FillRoundRect(tab, color, radius);
+            }
+            else
+            {
+                c.FillRect(tab, color);
+            }
+
+            x += tabWidth + 2;
+        }
+
+        _ = s;
+    }
+
+    private static void PaintScrollBar(GdiCanvas c, SettingsRenderState s)
+    {
+        if (s.Layout.ScrollThumbBounds.IsEmpty)
+        {
+            return;
+        }
+
+        var thumb = s.Layout.ScrollThumbBounds;
+
+        // 滑块两侧各留 2px，看起来像一根细条而不是贴边的色块。
+        var inset = 2;
+        c.FillRoundRect(
+            new PixelRect(thumb.Left + inset, thumb.Top, thumb.Right - inset, thumb.Bottom),
+            s.Theme.ScrollThumb,
+            (thumb.Width - (inset * 2)) / 2);
+    }
+
+    private static PixelRect Offset(PixelRect r, int dx, int dy) =>
+        r.IsEmpty ? r : new PixelRect(r.Left + dx, r.Top + dy, r.Right + dx, r.Bottom + dy);
+}

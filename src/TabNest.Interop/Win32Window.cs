@@ -182,6 +182,53 @@ public abstract class Win32Window : IDisposable
     /// <summary>窗口当前是否可见。用于诊断轨道为什么看不到。</summary>
     public bool IsVisible => _hwnd != 0 && User32.IsWindowVisible(_hwnd);
 
+    /// <summary>本窗口所在显示器的 DPI。跨屏拖动后必须重新取。</summary>
+    public int Dpi => _hwnd == 0 ? 96 : (int)User32.GetDpiForWindow(_hwnd);
+
+    /// <summary>客户区尺寸。自绘窗口的一切布局都以它为准，而不是窗口矩形。</summary>
+    public PixelRect ClientBounds =>
+        WindowClass.GetClientRect(_hwnd, out var r) ? r.ToPixelRect() : PixelRect.Empty;
+
+    /// <summary>显示窗口并置于前台。设置中心从托盘菜单打开时需要它真的跳到眼前。</summary>
+    public void ShowAndActivate()
+    {
+        if (_hwnd == 0)
+        {
+            return;
+        }
+
+        // 已最小化时先还原，否则 SetForegroundWindow 只会让任务栏图标闪烁。
+        if (User32.IsIconic(_hwnd))
+        {
+            User32.ShowWindow(_hwnd, User32.SW_RESTORE);
+        }
+        else
+        {
+            User32.ShowWindow(_hwnd, User32.SW_SHOW);
+        }
+
+        User32.SetForegroundWindow(_hwnd);
+    }
+
+    /// <summary>
+    /// 让标题栏跟随明暗主题。
+    ///
+    /// 不做这件事的话，暗色模式下会是"白色标题栏 + 深色内容"的割裂观感 ——
+    /// 这是自绘窗口最容易忽略的一处，因为标题栏由系统绘制，不在我们的绘制代码里。
+    /// Windows 10 1809 之前不支持，静默失败即可。
+    /// </summary>
+    public void SetTitleBarDarkMode(bool dark)
+    {
+        if (_hwnd == 0)
+        {
+            return;
+        }
+
+        var value = dark ? 1 : 0;
+        Dwmapi.DwmSetWindowAttribute(
+            _hwnd, Dwmapi.DWMWA_USE_IMMERSIVE_DARK_MODE, ref value, sizeof(int));
+    }
+
     /// <summary>窗口当前的实际矩形。用于诊断定位是否正确。</summary>
     public PixelRect ActualBounds =>
         User32.GetWindowRect(_hwnd, out var rect) ? rect.ToPixelRect() : PixelRect.Empty;
@@ -311,8 +358,75 @@ public abstract class Win32Window : IDisposable
         public const uint CaptureChanged = WindowClass.WM_CAPTURECHANGED;
         public const uint MiddleButtonUp = WindowClass.WM_MBUTTONUP;
         public const uint RightButtonUp = WindowClass.WM_RBUTTONUP;
+        public const uint MouseWheel = WindowClass.WM_MOUSEWHEEL;
         public const uint DpiChanged = WindowClass.WM_DPICHANGED;
         public const uint Destroy = WindowClass.WM_DESTROY;
+        public const uint Close = WindowClass.WM_CLOSE;
+        public const uint Size = WindowClass.WM_SIZE;
+        public const uint GetMinMaxInfo = WindowClass.WM_GETMINMAXINFO;
+
+        /// <summary>系统设置变更广播。明暗主题切换靠它感知。</summary>
+        public const uint SettingChange = WindowClass.WM_SETTINGCHANGE;
+    }
+
+    /// <summary>普通窗口样式。设置中心用它，而不是轨道那种无边框弹出窗口。</summary>
+    public static class User32Styles
+    {
+        /// <summary>标准可缩放窗口：标题栏、系统菜单、最小化/最大化、可拖边框。</summary>
+        public const long OverlappedWindow = 0x00CF0000;
+
+        /// <summary>绘制时跳过子窗口区域。宿主原生控件时必须带，否则会画到控件上造成闪烁。</summary>
+        public const long ClipChildren = 0x02000000;
+    }
+
+    /// <summary>WM_GETMINMAXINFO 的载荷写入。避免上层直接触碰非托管结构。</summary>
+    public static class MinMaxInfo
+    {
+        public static unsafe void SetMinTrackSize(nint lParam, int width, int height)
+        {
+            if (lParam == 0)
+            {
+                return;
+            }
+
+            var info = (MINMAXINFO*)lParam;
+            info->ptMinTrackSize.X = width;
+            info->ptMinTrackSize.Y = height;
+        }
+    }
+
+    /// <summary>
+    /// 一次性测量画布。
+    ///
+    /// 布局要先量文本才能定位，而测量发生在 WM_PAINT 的 BeginPaint 之前，
+    /// 此时还没有绘制用的 DC，因此单独取一个窗口 DC 专门用于测量。
+    /// </summary>
+    public sealed class MeasureCanvas : IDisposable
+    {
+        private readonly nint _hwnd;
+        private readonly nint _dc;
+
+        private MeasureCanvas(nint hwnd, nint dc)
+        {
+            _hwnd = hwnd;
+            _dc = dc;
+            Canvas = new GdiCanvas(dc);
+        }
+
+        public GdiCanvas Canvas { get; }
+
+        public static MeasureCanvas Create(nint hwnd) =>
+            new(hwnd, WindowClass.GetDC(hwnd));
+
+        public void Dispose()
+        {
+            Canvas.Dispose();
+
+            if (_dc != 0)
+            {
+                _ = WindowClass.ReleaseDC(_hwnd, _dc);
+            }
+        }
     }
 
     /// <summary>窗口样式常量，供派生类构造时使用，避免它们直接引用内部的 User32。</summary>

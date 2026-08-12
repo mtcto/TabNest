@@ -12,6 +12,12 @@ internal static partial class Dwmapi
     /// <summary>窗口圆角偏好（Windows 11 22000+）。</summary>
     public const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
 
+    /// <summary>
+    /// 深色标题栏（Windows 10 1809+）。
+    /// 自绘窗口不设它，暗色模式下会是"白标题栏 + 深色内容"的割裂观感。
+    /// </summary>
+    public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
     public const int DWMWCP_DEFAULT = 0;
     public const int DWMWCP_DONOTROUND = 1;
     public const int DWMWCP_ROUND = 2;

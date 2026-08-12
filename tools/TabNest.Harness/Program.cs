@@ -136,6 +136,8 @@ internal sealed class LauncherWindow : Window
             "modal" => TestWindows.CreateWithModal,
             "slow" => TestWindows.CreateSlowResponding,
             "tool" => TestWindows.CreateToolWindow,
+            "fixed" or "fixedsize" => TestWindows.CreateFixedSize,
+            "hideonclose" or "hide" => TestWindows.CreateHideOnClose,
             _ => null,
         };
 
