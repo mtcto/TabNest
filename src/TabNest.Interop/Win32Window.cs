@@ -269,6 +269,21 @@ public abstract class Win32Window : IDisposable
     public void HideWindow() => User32.ShowWindow(_hwnd, User32.SW_HIDE);
 
     /// <summary>
+    /// 捕获鼠标，让按住拖动期间的移动与松手消息在光标离开窗口后仍然送达。
+    /// 拖动交互必须调用：分组条拖快了光标会瞬间甩出窗口，不捕获就丢松手事件。
+    /// </summary>
+    public void CaptureMouse()
+    {
+        if (_hwnd != 0)
+        {
+            User32.SetCapture(_hwnd);
+        }
+    }
+
+    /// <summary>释放鼠标捕获。捕获是全局唯一的，因此这是静态操作。</summary>
+    public static void ReleaseMouseCapture() => User32.ReleaseCapture();
+
+    /// <summary>
     /// 注册鼠标离开通知。
     /// 不注册就收不到 <see cref="Messages.MouseLeave"/>，悬停高亮会永远留在最后停过的标签上。
     /// </summary>
@@ -293,6 +308,7 @@ public abstract class Win32Window : IDisposable
         public const uint MouseLeave = WindowClass.WM_MOUSELEAVE;
         public const uint LeftButtonDown = WindowClass.WM_LBUTTONDOWN;
         public const uint LeftButtonUp = WindowClass.WM_LBUTTONUP;
+        public const uint CaptureChanged = WindowClass.WM_CAPTURECHANGED;
         public const uint MiddleButtonUp = WindowClass.WM_MBUTTONUP;
         public const uint RightButtonUp = WindowClass.WM_RBUTTONUP;
         public const uint DpiChanged = WindowClass.WM_DPICHANGED;

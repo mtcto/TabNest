@@ -38,6 +38,13 @@ internal static partial class User32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool IsHungAppWindow(nint hWnd);
 
+    [LibraryImport(Lib, SetLastError = true)]
+    public static partial nint SetCapture(nint hWnd);
+
+    [LibraryImport(Lib)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool ReleaseCapture();
+
     // ---- 文本与类名 ----
 
     [LibraryImport(Lib, EntryPoint = "GetWindowTextLengthW", SetLastError = true)]

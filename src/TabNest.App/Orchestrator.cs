@@ -108,6 +108,24 @@ internal sealed class Orchestrator : IDisposable
             return;
         }
 
+        // 事件从产生到被 UI 线程处理的延迟。
+        //
+        // 这是区分"我们处理慢"和"事件本身晚到"的唯一手段：
+        // 若处理很快但延迟很高，瓶颈在 WinEvent 投递链路或 UI 线程被别的事占住，
+        // 继续优化处理代码不会有任何效果。
+        if (evt.Kind is WindowEventKind.LocationChanged)
+        {
+            var latencyMs = (Stopwatch.GetTimestamp() - evt.TimestampTicks)
+                * 1000.0 / Stopwatch.Frequency;
+
+            if (latencyMs > SlowFrameThresholdMs)
+            {
+                FileLog.Warn(
+                    $"位置事件延迟 {latencyMs:F0}ms 才到达 UI 线程"
+                    + $"（观察层丢弃 {_observer.DroppedEvents} 条）");
+            }
+        }
+
         switch (evt.Kind)
         {
             case WindowEventKind.Destroyed:
@@ -141,6 +159,13 @@ internal sealed class Orchestrator : IDisposable
 
     private void OnWindowDestroyed(nint hwnd)
     {
+        // 被拖窗口在拖动中途消失（进程退出/崩溃）就不会再有拖拽结束事件，
+        // 必须立刻落位，否则停靠的成员窗口滞留屏外。
+        if (_liftedGroupId is { } liftedId && hwnd == _liftAuthority)
+        {
+            SettleGroup(liftedId, 0);
+        }
+
         var group = FindGroupByHandle(hwnd);
         if (group is null)
         {
@@ -209,11 +234,45 @@ internal sealed class Orchestrator : IDisposable
     /// </summary>
     private void SyncGroupToMember(GroupSession group, nint memberHandle)
     {
+        // 组处于提起状态时，只有权威成员的位置可信。
+        // 其他成员的位置事件是停靠动作自己的回声（坐标在屏外），
+        // 拿它们更新组矩形会让分组栏跟着飞出屏幕。
+        if (_liftedGroupId is not null && group.Id == _liftedGroupId)
+        {
+            if (memberHandle != _liftAuthority)
+            {
+                return;
+            }
+
+            var lifted = WindowEnumerator.ReadVisibleBounds(memberHandle);
+            if (lifted.IsEmpty || Near(lifted, group.Bounds, tolerance: 2))
+            {
+                return;
+            }
+
+            // 只更新组矩形并让分组栏跟随（自己进程的窗口，成本可忽略）。
+            // 不发任何对齐指令 —— 拖动期间零跨进程调用正是提起状态存在的意义。
+            if (_manager.SetGroupBounds(group.Id, lifted).Group is { } liftedGroup)
+            {
+                RefreshRail(liftedGroup);
+            }
+
+            return;
+        }
+
+        // 拖动路径上的耗时埋点。
+        //
+        // 这条路径每秒执行几十次，任何一步阻塞都会直接表现为拖动卡顿，
+        // 而从外部完全看不出是哪一步。只在超过阈值时才记录，正常拖动不产生日志。
+        var watch = Stopwatch.StartNew();
+
         var bounds = WindowEnumerator.ReadVisibleBounds(memberHandle);
+        var afterRead = watch.ElapsedMilliseconds;
 
         // 容忍一两像素的抖动，否则会陷入"对齐 → 触发事件 → 再对齐"的自激循环。
         if (bounds.IsEmpty || Near(bounds, group.Bounds, tolerance: 2))
         {
+            ReportSlowFrame(watch, afterRead, 0, 0);
             return;
         }
 
@@ -243,18 +302,187 @@ internal sealed class Orchestrator : IDisposable
             // 反正下一帧还会带来更新的位置。
             if (Interlocked.CompareExchange(ref _alignInFlight, 1, 0) == 0)
             {
+                var queued = Stopwatch.StartNew();
+
                 _ = _controller.ExecuteAsync(actions)
                     .ContinueWith(
-                        _ => Interlocked.Exchange(ref _alignInFlight, 0),
+                        _ =>
+                        {
+                            Interlocked.Exchange(ref _alignInFlight, 0);
+
+                            // 对齐在控制队列线程上执行。它若被目标进程拖住，
+                            // 后续所有帧都会因为"有一批在途"而被丢弃 ——
+                            // 这正是"卡住两秒再整体跳回来"的形态。
+                            if (queued.ElapsedMilliseconds > SlowFrameThresholdMs)
+                            {
+                                FileLog.Warn(
+                                    $"对齐耗时 {queued.ElapsedMilliseconds}ms"
+                                    + $"（{actions.Count} 个窗口），期间的拖动帧被丢弃。");
+                            }
+                        },
                         TaskScheduler.Default);
+            }
+            else
+            {
+                Interlocked.Increment(ref _droppedFrames);
             }
         }
 
+        var afterQueue = watch.ElapsedMilliseconds;
         RefreshRail(updated);
+        ReportSlowFrame(watch, afterRead, afterQueue, watch.ElapsedMilliseconds);
     }
+
+    private const long SlowFrameThresholdMs = 40;
 
     /// <summary>是否已有一批对齐指令在执行中。用于拖动时丢弃过期的中间帧。</summary>
     private int _alignInFlight;
+
+    /// <summary>因为上一批对齐还没完成而被丢弃的帧数。持续增长说明对齐是瓶颈。</summary>
+    private long _droppedFrames;
+
+    /// <summary>处于"提起"状态的组。拖动期间非权威成员停靠屏外，落位时归零。</summary>
+    private string? _liftedGroupId;
+
+    /// <summary>提起期间唯一可信的位置来源：标题栏拖动是被拖成员，分组条拖动是活动成员。</summary>
+    private nint _liftAuthority;
+
+    /// <summary>上一次拖放命中判定的时间戳，用于 30ms 节流。</summary>
+    private long _lastDropProbeTicks;
+
+    /// <summary>
+    /// 屏外停靠的 X 坐标，与系统停靠最小化窗口的传统位置一致，远离一切可见显示器。
+    /// </summary>
+    private const int ParkedLeft = -32000;
+
+    /// <summary>
+    /// 拖动开始：把组"提起来"。除权威成员外的窗口全部停靠到屏外。
+    ///
+    /// 拖动期间对成员窗口做任何跨进程调用都是卡顿之源：同一进程的多个成员
+    /// （典型如两个 IDEA 项目窗口）共享同一条 UI 线程，被拖窗口的模态拖动循环
+    /// 每处理一步鼠标移动，都会被我们塞给其他成员的重排消息打断一次 ——
+    /// 事件到得再快、我们处理得再快都救不了，这正是"拖分组窗口卡爆"的根因。
+    /// 停靠之后拖动期间零跨进程调用，被拖窗口就是一次纯粹的系统原生拖动。
+    ///
+    /// 停靠而不是隐藏或最小化：任务栏按钮纹丝不动，也没有还原动画。
+    /// 崩溃安全：停靠只是一次普通对齐，崩溃恢复与退出解散走的都是快照还原，
+    /// 天然会把屏外的窗口拉回原位，不需要额外的清理账本。
+    /// </summary>
+    private void LiftGroup(GroupSession group, nint authority)
+    {
+        if (_liftedGroupId is not null)
+        {
+            return;
+        }
+
+        _liftedGroupId = group.Id;
+        _liftAuthority = authority;
+
+        var bounds = group.Bounds;
+        var actions = new List<Core.Grouping.WindowAction>();
+
+        foreach (var tab in group.LiveTabs)
+        {
+            var handle = tab.Identity.Handle;
+
+            // 权威成员在用户手里，活动标签是分组栏的定位锚 —— 两者通常是同一个
+            // （拖动前系统必已把窗口带到前台，前台事件又把它设成了活动标签）。
+            // 万一不是，也绝不停靠活动标签，宁可让它留在原地可见。
+            if (handle == authority || handle == group.ActiveTab?.Identity.Handle)
+            {
+                continue;
+            }
+
+            actions.Add(new Core.Grouping.AlignWindowAction(
+                tab.Identity,
+                PixelRect.FromSize(ParkedLeft, bounds.Top, bounds.Width, bounds.Height)));
+        }
+
+        if (actions.Count > 0)
+        {
+            FileLog.Info($"组 {group.Id} 提起：{actions.Count} 个成员停靠屏外。");
+
+            _ = _controller.ExecuteAsync(actions).ContinueWith(
+                t => ReportFailures(t.Result),
+                TaskScheduler.Default);
+        }
+    }
+
+    /// <summary>
+    /// 拖动结束：落位。以权威成员的实际位置为准，把停靠的成员一次性对齐回来。
+    ///
+    /// 必须无条件对齐全部成员：拖动期间组矩形一直跟着权威成员走，
+    /// "接近就跳过"的常规判断会认为一切就绪，而停靠的窗口还在屏外。
+    /// 也不走 <see cref="_alignInFlight"/> 节流门 —— 这不是可丢弃的中间帧，是终点。
+    /// </summary>
+    private void SettleGroup(string groupId, nint authority)
+    {
+        _liftedGroupId = null;
+        _liftAuthority = 0;
+
+        var group = _manager.FindGroup(groupId);
+        if (group is null)
+        {
+            return;
+        }
+
+        var bounds = authority != 0
+            ? WindowEnumerator.ReadVisibleBounds(authority)
+            : PixelRect.Empty;
+
+        if (bounds.IsEmpty)
+        {
+            bounds = group.Bounds;
+        }
+
+        if (bounds.IsEmpty)
+        {
+            return;
+        }
+
+        var result = _manager.SetGroupBounds(groupId, bounds);
+        var updated = result.Group ?? group;
+
+        var actions = new List<Core.Grouping.WindowAction>();
+        foreach (var tab in updated.LiveTabs)
+        {
+            if (tab.Identity.Handle != authority)
+            {
+                actions.Add(new Core.Grouping.AlignWindowAction(tab.Identity, bounds));
+            }
+        }
+
+        if (actions.Count > 0)
+        {
+            _ = _controller.ExecuteAsync(actions).ContinueWith(
+                t => ReportFailures(t.Result),
+                TaskScheduler.Default);
+        }
+
+        RefreshRail(updated);
+
+        // 终点位置落盘一次，崩溃恢复才知道窗口现在应该在哪。高频的拖动路径上从不落盘。
+        PersistSession();
+    }
+
+    /// <summary>
+    /// 只在单帧超时的情况下记录耗时分解。
+    /// 拖动流畅时完全不写日志，卡顿时立刻能看出是读边框、排队还是刷新分组栏慢。
+    /// </summary>
+    private void ReportSlowFrame(Stopwatch watch, long afterRead, long afterQueue, long total)
+    {
+        if (watch.ElapsedMilliseconds <= SlowFrameThresholdMs)
+        {
+            return;
+        }
+
+        FileLog.Warn(
+            $"拖动帧耗时 {watch.ElapsedMilliseconds}ms —— "
+            + $"读窗口边框 {afterRead}ms，"
+            + $"排队对齐 {Math.Max(0, afterQueue - afterRead)}ms，"
+            + $"刷新分组栏 {Math.Max(0, total - afterQueue)}ms，"
+            + $"累计丢帧 {Interlocked.Read(ref _droppedFrames)}");
+    }
 
     /// <summary>窗口圆角半径缓存。避免拖动时每帧查询 DWM 属性。</summary>
     private readonly Dictionary<nint, int> _cornerRadiusCache = [];
@@ -305,6 +533,12 @@ internal sealed class Orchestrator : IDisposable
         RefreshLocationWatchList();
 
         FileLog.Info($"拖拽开始：{DescribeWindow(hwnd)}");
+
+        // 拖的是组成员（移动或缩放同理）→ 整组提起，其余成员停靠屏外。
+        if (FindGroupByHandle(hwnd) is { } grabbed)
+        {
+            LiftGroup(grabbed, hwnd);
+        }
     }
 
     /// <summary>
@@ -319,6 +553,17 @@ internal sealed class Orchestrator : IDisposable
         {
             return;
         }
+
+        // 命中判定要枚举光标下的窗口链并逐个做资格评估，是拖动路径上最贵的一步。
+        // 位置事件不合并之后它会以事件原始频率被调用，把 UI 线程堵出几十毫秒的积压。
+        // 30ms 内光标挪不了几个像素，节流对判定结果毫无影响。
+        var now = Stopwatch.GetTimestamp();
+        if ((now - _lastDropProbeTicks) * 1000 / Stopwatch.Frequency < 30)
+        {
+            return;
+        }
+
+        _lastDropProbeTicks = now;
 
         if (!User32Cursor.TryGet(out var cursor))
         {
@@ -450,6 +695,15 @@ internal sealed class Orchestrator : IDisposable
         RefreshLocationWatchList();
 
         FileLog.Info($"拖拽结束：{DescribeWindow(hwnd)}");
+
+        // 组成员的拖拽在开始时已把整组提起，无论以何种方式结束都必须落位，
+        // 否则停靠的成员会滞留屏外。组成员拖动 = 整组移动，永不参与合并判定。
+        if (_liftedGroupId is { } liftedId)
+        {
+            FileLog.Info($"  组 {liftedId} 整体移动完成。");
+            SettleGroup(liftedId, dragged != 0 ? dragged : _liftAuthority);
+            return;
+        }
 
         if (dragged == 0 || dragged != hwnd)
         {
@@ -689,6 +943,16 @@ internal sealed class Orchestrator : IDisposable
             return;
         }
 
+        if (interaction.Action is RailAction.MoveGroupEnd)
+        {
+            if (_liftedGroupId == groupId)
+            {
+                SettleGroup(groupId, _liftAuthority);
+            }
+
+            return;
+        }
+
         var result = interaction.Action switch
         {
             RailAction.ActivateTab => _manager.ActivateTab(groupId, interaction.Target),
@@ -720,6 +984,26 @@ internal sealed class Orchestrator : IDisposable
             return;
         }
 
+        // 首次移动时提起整组：拖动期间只有活动成员实时跟随，其余成员停靠屏外，
+        // 松手（MoveGroupEnd）再落位。往同一进程的多个窗口高频投递重排消息
+        // 会把对方的 UI 线程塞满，整组一顿一顿 —— 与标题栏拖动同一个病根。
+        if (_liftedGroupId is null)
+        {
+            var authority = group.ActiveTab?.Identity.Handle ?? 0;
+            if (authority == 0)
+            {
+                return;
+            }
+
+            LiftGroup(group, authority);
+        }
+
+        if (_liftedGroupId != groupId)
+        {
+            // 理论上到不了：每条分组栏各自独立，同一时刻只可能拖动一条。
+            return;
+        }
+
         var moved = group.Bounds.OffsetBy(deltaX, deltaY);
 
         // 必须写回组模型。只用局部变量的话，下一次鼠标移动仍从旧矩形算起，
@@ -730,16 +1014,13 @@ internal sealed class Orchestrator : IDisposable
             return;
         }
 
-        var actions = new List<Core.Grouping.WindowAction>();
-        foreach (var tab in result.Group.LiveTabs)
+        // 只对齐活动成员这一个窗口。中间帧可丢 —— 位置是绝对坐标，
+        // 下一帧总会带来更新的值，最终正确性由松手时的落位保证。
+        if (result.Group.ActiveTab is { } active
+            && active.Identity.Handle == _liftAuthority
+            && Interlocked.CompareExchange(ref _alignInFlight, 1, 0) == 0)
         {
-            actions.Add(new Core.Grouping.AlignWindowAction(tab.Identity, moved));
-        }
-
-        // 同上：只允许一批在途，避免拖动时指令堆积造成的一顿一顿。
-        if (Interlocked.CompareExchange(ref _alignInFlight, 1, 0) == 0)
-        {
-            _ = _controller.ExecuteAsync(actions)
+            _ = _controller.ExecuteAsync(new Core.Grouping.AlignWindowAction(active.Identity, moved))
                 .ContinueWith(
                     _ => Interlocked.Exchange(ref _alignInFlight, 0),
                     TaskScheduler.Default);
@@ -937,6 +1218,7 @@ internal sealed class Orchestrator : IDisposable
             _settings.Appearance.CloseButton,
             showMenuButton: !_settings.Appearance.HideMenuButton);
 
+        var railStart = Stopwatch.StartNew();
         var rail = GetOrCreateRail(group.Id);
 
         rail.Update(
@@ -950,11 +1232,14 @@ internal sealed class Orchestrator : IDisposable
             },
             ownerHwnd: active.Identity.Handle);
 
-        // 记录轨道的实际落点。布局算对了但窗口没出现在该出现的地方，
-        // 是这一段最容易出问题也最难从外部看出来的环节。
-        FileLog.Info(
-            $"轨道刷新：组 {group.Id}，{group.LiveTabCount} 个标签，"
-            + $"期望 {layout.Bounds}，实际 {rail.ActualBounds}，可见 {rail.IsVisible}");
+        // 分组栏刷新只在异常缓慢时记录。
+        // 拖动时这里每秒执行几十次，无条件记录会把日志刷爆，还会自己变成性能问题。
+        if (railStart.ElapsedMilliseconds > SlowFrameThresholdMs)
+        {
+            FileLog.Warn(
+                $"分组栏刷新耗时 {railStart.ElapsedMilliseconds}ms"
+                + $"（组 {group.Id}，{group.LiveTabCount} 个标签）");
+        }
     }
 
     private TabRailWindow GetOrCreateRail(string groupId)

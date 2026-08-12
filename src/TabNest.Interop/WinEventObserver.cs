@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
@@ -23,9 +22,6 @@ namespace TabNest.Interop;
 /// </summary>
 public sealed class WinEventObserver : IDisposable
 {
-    /// <summary>位置变化事件的合并窗口。拖拽一个窗口每秒能产生上百个事件，不合并会淹没队列。</summary>
-    private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMilliseconds(16);
-
     /// <summary>队列上限。满了丢弃最旧的位置事件而非无限增长 —— 计划书要求事件风暴不得让队列无限增长。</summary>
     private const int QueueCapacity = 2048;
 
@@ -37,9 +33,6 @@ public sealed class WinEventObserver : IDisposable
 
     private readonly Channel<WindowEvent> _channel;
 
-    /// <summary>位置变化的待合并暂存。键是窗口句柄，只保留最新一次。</summary>
-    private readonly ConcurrentDictionary<nint, long> _pendingLocation = new();
-
     /// <summary>
     /// 关注位置变化的窗口集合。
     ///
@@ -50,9 +43,6 @@ public sealed class WinEventObserver : IDisposable
     /// 用不可变集合 + 整体替换，回调侧只读不锁。
     /// </summary>
     private volatile HashSet<nint> _locationWatchList = [];
-
-    /// <summary>是否已排定一次合并刷新。避免空闲时也在空转定时器。</summary>
-    private int _flushScheduled;
 
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Thread _thread;
@@ -91,7 +81,7 @@ public sealed class WinEventObserver : IDisposable
         _locationWatchList = [.. handles];
     }
 
-    /// <summary>合并后的事件流。消费者应在自己的线程上读取，不要在 UI 线程同步等待。</summary>
+    /// <summary>事件流。消费者应在自己的线程上读取，不要在 UI 线程同步等待。</summary>
     public ChannelReader<WindowEvent> Events => _channel.Reader;
 
     /// <summary>已丢弃的事件数。持续增长说明消费者跟不上，是性能问题的早期信号。</summary>
@@ -225,18 +215,26 @@ public sealed class WinEventObserver : IDisposable
     {
         var now = Stopwatch.GetTimestamp();
 
-        // 位置变化单独走合并路径：拖动一个窗口每秒可产生上百次，直接入队会挤掉其他事件。
         if (eventType == User32.EVENT_OBJECT_LOCATIONCHANGE)
         {
-            // 先做关注列表过滤再谈合并 —— 全系统的位置事件绝大多数与我们无关，
-            // 连暂存都不该做。
+            // 关注列表过滤：全系统的位置事件绝大多数与我们无关，连暂存都不该做。
             if (!_locationWatchList.Contains(hwnd))
             {
                 return;
             }
 
-            _pendingLocation[hwnd] = now;
-            ScheduleFlush();
+            // 过滤之后**立即投递，不做延迟合并**。
+            //
+            // 早期这里攒 16ms 再发，想的是防事件洪水。但关注列表只剩组成员和被拖窗口
+            // 这几个句柄，每秒最多百来条，根本不需要合并。
+            // 而 Task.Delay(16) 受 Windows 默认约 15.6ms 的定时器精度影响，
+            // 实际会等 16~31ms，加上线程调度实测让事件晚到 40 多毫秒 ——
+            // 被拖的窗口由系统直接移动、丝滑跟手，成员窗口和分组栏却慢三帧才跟上，
+            // 视觉上就是"分组栏脱开又追上"的顿挫。
+            //
+            // 有界队列本身就提供了背压：消费不过来时丢弃最旧的位置事件，
+            // 而位置事件天然可丢 —— 后一条总是比前一条更准确。
+            Publish(new WindowEvent(WindowEventKind.LocationChanged, hwnd, now));
             return;
         }
 
@@ -272,46 +270,6 @@ public sealed class WinEventObserver : IDisposable
         }
     }
 
-    /// <summary>
-    /// 按需排定一次合并刷新。
-    ///
-    /// 刻意不用固定周期的 PeriodicTimer：那样即使完全空闲也要每秒唤醒 62 次，
-    /// 实测能把空闲 CPU 推到 0.5% 单核以上，而 Groupy 只有 0.08%。
-    /// 改成"有事件才排一次 16ms 延迟刷新"，空闲时零唤醒。
-    /// </summary>
-    private void ScheduleFlush()
-    {
-        if (Interlocked.CompareExchange(ref _flushScheduled, 1, 0) != 0)
-        {
-            return;
-        }
-
-        _ = FlushAfterDelayAsync();
-    }
-
-    private async Task FlushAfterDelayAsync()
-    {
-        try
-        {
-            await Task.Delay(CoalesceWindow, _shutdown.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _flushScheduled, 0);
-        }
-
-        foreach (var hwnd in _pendingLocation.Keys)
-        {
-            if (_pendingLocation.TryRemove(hwnd, out var timestamp))
-            {
-                Publish(new WindowEvent(WindowEventKind.LocationChanged, hwnd, timestamp));
-            }
-        }
-    }
 
     public void Dispose()
     {

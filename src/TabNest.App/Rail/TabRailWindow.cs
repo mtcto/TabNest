@@ -32,6 +32,13 @@ public enum RailAction
 
     /// <summary>拖动分组条，整组窗口一起移动。</summary>
     MoveGroup,
+
+    /// <summary>
+    /// 分组条拖动结束（松手或鼠标捕获丢失）。
+    /// 编排层在拖动期间把非活动成员停靠在屏外，收到这个动作才把它们落位回来 ——
+    /// 丢了它成员窗口就会滞留屏外，因此捕获丢失时也必须发出。
+    /// </summary>
+    MoveGroupEnd,
 }
 
 /// <summary>
@@ -168,6 +175,10 @@ internal sealed class TabRailWindow : Win32Window
 
             case Messages.LeftButtonUp:
                 OnMouseUp(ToPoint(lParam));
+                return 0;
+
+            case Messages.CaptureChanged:
+                OnCaptureLost();
                 return 0;
 
             case Messages.MiddleButtonUp:
@@ -308,6 +319,9 @@ internal sealed class TabRailWindow : Win32Window
             _isMovingGroup = false;
             _pressPoint = point;
             _pressedTab = tab.Identity;
+
+            // 捕获鼠标：标签重排时拖出轨道再松手是"拆分"手势，不捕获就收不到那次松手。
+            CaptureMouse();
             return;
         }
 
@@ -320,6 +334,7 @@ internal sealed class TabRailWindow : Win32Window
             _isMovingGroup = true;
             _lastGroupDragPoint = new PixelPoint(sx, sy);
             _pressedTab = default;
+            CaptureMouse();
         }
     }
 
@@ -334,9 +349,12 @@ internal sealed class TabRailWindow : Win32Window
         var wasMovingGroup = _isMovingGroup;
         var pressed = _pressedTab;
 
+        // 先清标志再释放捕获：释放会触发 CaptureChanged，
+        // 标志已清则那边不会把这次正常松手误判成"捕获被抢走"。
         _isPressed = false;
         _isDragging = false;
         _isMovingGroup = false;
+        ReleaseMouseCapture();
 
         if (state.DropIndicatorIndex is not null)
         {
@@ -345,6 +363,7 @@ internal sealed class TabRailWindow : Win32Window
 
         if (wasMovingGroup)
         {
+            Emit(RailAction.MoveGroupEnd, default);
             return;
         }
 
@@ -379,6 +398,31 @@ internal sealed class TabRailWindow : Win32Window
         if (state.Layout.HitTestTab(point) is { } tab)
         {
             Emit(RailAction.ActivateTab, tab.Identity);
+        }
+    }
+
+    /// <summary>
+    /// 鼠标捕获被外力夺走（弹窗、系统热键、别的窗口 SetCapture）。
+    /// 正常松手在释放捕获前已清掉全部标志，走到这里等于无事发生；
+    /// 标志还在就说明拖动被硬生生打断，必须像松手一样收尾 ——
+    /// 尤其是整组拖动，不发结束动作，停靠在屏外的成员窗口就永远回不来。
+    /// </summary>
+    private void OnCaptureLost()
+    {
+        var wasMovingGroup = _isMovingGroup;
+
+        _isPressed = false;
+        _isDragging = false;
+        _isMovingGroup = false;
+
+        if (_state is { } state && state.DropIndicatorIndex is not null)
+        {
+            UpdateState(state with { DropIndicatorIndex = null });
+        }
+
+        if (wasMovingGroup)
+        {
+            Emit(RailAction.MoveGroupEnd, default);
         }
     }
 
