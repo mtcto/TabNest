@@ -11,6 +11,15 @@ public sealed record RailTheme
     public uint Background { get; init; }
     public uint ActiveTabBackground { get; init; }
     public uint HoverTabBackground { get; init; }
+
+    /// <summary>
+    /// 非活动标签的底色。
+    ///
+    /// 必须与背景条有可见差异：早期非活动标签完全不填充，结果整条分组栏上
+    /// 只有活动标签有形状，「标签样式：传统 / 圆形」这个设置几乎看不出区别，
+    /// 标签之间的边界也全靠猜。
+    /// </summary>
+    public uint InactiveTabBackground { get; init; }
     public uint ActiveText { get; init; }
     public uint InactiveText { get; init; }
     public uint Border { get; init; }
@@ -44,6 +53,7 @@ public sealed record RailTheme
         Background = 0xFFE8E8E8,
         ActiveTabBackground = 0xFFFFFFFF,
         HoverTabBackground = 0xFFF2F2F2,
+        InactiveTabBackground = 0xFFDCDCDC,
         ActiveText = 0xFF1A1A1A,
         InactiveText = 0xFF5A5A5A,
         Border = 0xFFCCCCCC,
@@ -52,11 +62,35 @@ public sealed record RailTheme
         WindowBlend = 0xFFF5F5F5,
     };
 
+    /// <summary>按用户选择的方案取主题。跟随系统时读注册表的浅色/深色偏好。</summary>
+    public static RailTheme For(Core.Models.RailColorScheme scheme) => scheme switch
+    {
+        Core.Models.RailColorScheme.Light => Default,
+        Core.Models.RailColorScheme.Dark => Dark,
+        _ => Interop.SystemTheme.IsDarkMode() ? Dark : Default,
+    };
+
+    /// <summary>深色方案。整体深色桌面下比浅灰底更协调。</summary>
+    public static RailTheme Dark { get; } = new()
+    {
+        Background = 0xFF2B2B2B,
+        ActiveTabBackground = 0xFF3C3C3C,
+        HoverTabBackground = 0xFF353535,
+        InactiveTabBackground = 0xFF262626,
+        ActiveText = 0xFFF0F0F0,
+        InactiveText = 0xFFA8A8A8,
+        Border = 0xFF454545,
+        DegradedText = 0xFFE0A050,
+        DropHighlight = 0xFF4CC2FF,
+        WindowBlend = 0xFF202020,
+    };
+
     public static RailTheme Light { get; } = new()
     {
         Background = 0xFFF3F3F3,
         ActiveTabBackground = 0xFFFFFFFF,
         HoverTabBackground = 0xFFEAEAEA,
+        InactiveTabBackground = 0xFFE6E6E6,
         ActiveText = 0xFF1A1A1A,
         InactiveText = 0xFF5A5A5A,
         Border = 0xFFD8D8D8,

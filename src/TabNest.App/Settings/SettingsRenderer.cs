@@ -22,6 +22,12 @@ public sealed record SettingsRenderState
 
     /// <summary>光标下的卡片，格式为「块序号:选项序号」。</summary>
     public (int Block, int Option)? HoveredCard { get; init; }
+
+    /// <summary>
+    /// 光标在内容坐标系里的位置（已扣除滚动偏移）。
+    /// 列表行与按钮的悬停高亮直接用它判断，省得为每种元素都维护一份悬停状态。
+    /// </summary>
+    public PixelPoint PointerPosition { get; init; } = new(-1, -1);
 }
 
 /// <summary>
@@ -343,10 +349,17 @@ internal static class SettingsRenderer
             return;
         }
 
-        for (var i = 0; i < b.Options.Count && i < list.Items.Count; i++)
+        // 列表行在前，操作按钮在后。
+        for (var i = 0; i < list.Items.Count && i < b.Options.Count; i++)
         {
             var row = Offset(b.Options[i], ox, oy);
             var (primary, secondary) = list.Items[i];
+
+            // 可点击的行给个悬停底色，让"这里能点"显而易见。
+            if (list.ItemAction is not null && row.Contains(s.PointerPosition))
+            {
+                c.FillRoundRect(row, t.CardHoverBackground, s.Metrics.CornerRadius / 2);
+            }
 
             var primaryHeight = c.MeasureTextHeight(
                 primary, row.Width, TextStyle.Body, s.Dpi, wrap: false);
@@ -368,6 +381,32 @@ internal static class SettingsRenderer
                         t.TextSecondary, TextStyle.Caption, s.Dpi, wrap: true);
                 }
             }
+        }
+
+        // 操作按钮。
+        for (var i = 0; i < list.Buttons.Count; i++)
+        {
+            var index = list.Items.Count + i;
+
+            if (index >= b.Options.Count)
+            {
+                break;
+            }
+
+            var rect = Offset(b.Options[index], ox, oy);
+            var hovered = rect.Contains(s.PointerPosition);
+
+            c.FillRoundRect(
+                rect,
+                hovered ? t.Accent : t.CardHoverBackground,
+                s.Metrics.CornerRadius);
+
+            c.DrawRoundRectOutline(rect, t.Border, s.Metrics.CornerRadius);
+
+            c.DrawStyledText(
+                list.Buttons[i].Text, rect,
+                hovered ? t.AccentText : t.Text,
+                TextStyle.Body, s.Dpi, TextAlign.Center);
         }
     }
 

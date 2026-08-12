@@ -96,8 +96,8 @@ public static class SettingsPages
                         Illustration.TaskbarAll),
                     new ChoiceOption(
                         (int)TaskbarButtonPolicy.ActiveOnly,
-                        "仅显示活动窗口",
-                        "只保留当前活动标签的按钮，任务栏更清爽。",
+                        "只保留活动窗口的按钮",
+                        "任务栏上只留一个按钮，对应当前活动的标签。切换标签时这个按钮会跟着变。",
                         Illustration.TaskbarActiveOnly),
                     new ChoiceOption(
                         (int)TaskbarButtonPolicy.SingleCombined,
@@ -169,22 +169,13 @@ public static class SettingsPages
                     new ChoiceOption(
                         (int)TabVisibility.AlwaysVisible,
                         "始终可见",
-                        "任何时候都显示分组栏。",
+                        "分组栏一直显示在窗口上方。",
                         Illustration.RailAbove),
-                    new ChoiceOption(
-                        (int)TabVisibility.ActiveWindowOnly,
-                        "仅活动窗口",
-                        "只有当该组的窗口是前台窗口时才显示。",
-                        Illustration.TaskbarActiveOnly),
-                    new ChoiceOption(
-                        (int)TabVisibility.HideWhenMaximized,
-                        "最大化时隐藏",
-                        "窗口最大化后隐藏，光标移到窗口顶部时浮出。",
-                        Illustration.IntegratedTitleBar),
                     new ChoiceOption(
                         (int)TabVisibility.AlwaysHidden,
                         "始终隐藏",
-                        "平时不显示，光标移到窗口顶部时才浮出。",
+                        "完全不显示分组栏，也不会因鼠标靠近而浮出。"
+                        + "分组关系照常生效：切换、整组移动、快捷键都能用，只是不占屏幕空间。",
                         Illustration.TaskbarSingle),
                 ],
             },
@@ -202,8 +193,8 @@ public static class SettingsPages
                 [
                     new ChoiceOption(
                         (int)CloseButtonPolicy.ActiveTabOnly,
-                        "仅活动标签",
-                        "只有当前标签显示关闭按钮，最不容易误点。",
+                        "只在当前标签上",
+                        "只有当前活动的那个标签显示关闭按钮，最不容易误点。",
                         Illustration.TabsRounded),
                     new ChoiceOption(
                         (int)CloseButtonPolicy.OnHoverOnly,
@@ -235,6 +226,7 @@ public static class SettingsPages
             {
                 Id = SettingId.TallerTabs,
                 Title = "使标签和背景栏更高",
+                Description = "分组栏高度从 34 像素增加到 42 像素，标签更容易点中，代价是多占一点垂直空间。",
                 Value = s.Appearance.TallerTabs,
             },
             new ToggleBlock
@@ -248,6 +240,7 @@ public static class SettingsPages
             {
                 Id = SettingId.ShowWindowIcon,
                 Title = "在标签上显示窗口图标",
+                Description = "在标题左侧显示该窗口所属应用的图标，同时开多个应用时更容易分辨。关闭后标题可用宽度更大。",
                 Value = s.Appearance.ShowWindowIcon,
             },
             new ToggleBlock
@@ -261,6 +254,7 @@ public static class SettingsPages
             {
                 Id = SettingId.ShowCloseAllButton,
                 Title = "显示「关闭整组」按钮",
+                Description = "在分组栏最右侧显示一个按钮，点它会关闭组内全部窗口。关闭此项可防止误触。",
                 Value = s.Appearance.ShowCloseAllButton,
             },
             new ToggleBlock
@@ -305,29 +299,6 @@ public static class SettingsPages
                         (int)DragTrigger.RequireCtrl,
                         "按住 Ctrl",
                         "同上，改用 Ctrl 键。",
-                        Illustration.TabsSquare),
-                ],
-            },
-
-            new SectionBlock
-            {
-                Title = "中键点击标签",
-            },
-            new ChoiceBlock
-            {
-                Id = SettingId.MiddleClick,
-                Value = (int)s.Grouping.MiddleClick,
-                Options =
-                [
-                    new ChoiceOption(
-                        (int)MiddleClickAction.CloseTab,
-                        "关闭标签",
-                        "与浏览器一致。",
-                        Illustration.TabsRounded),
-                    new ChoiceOption(
-                        (int)MiddleClickAction.Nothing,
-                        "不做任何事",
-                        "避免误触关闭窗口。",
                         Illustration.TabsSquare),
                 ],
             },
@@ -391,8 +362,9 @@ public static class SettingsPages
     {
         var ruleRows = s.Rules
             .Select(r => (
-                Primary: $"{r.Name}（{DescribeAction(r.Action)}）",
-                Secondary: DescribeConditions(r)))
+                Primary: $"{r.Name}（{DescribeAction(r.Action)}）"
+                    + (r.IsUsable ? string.Empty : "　⚠ 没有条件，不会生效"),
+                Secondary: DescribeConditions(r) + "　·　点击编辑，右键删除"))
             .ToList();
 
         var hotkeyRows = s.Hotkeys.Bindings
@@ -462,8 +434,9 @@ public static class SettingsPages
             {
                 Title = "当前规则",
                 Items = ruleRows,
-                EmptyText = "还没有任何规则。当前版本可在数据目录的 settings.json 中编辑 rules 数组，"
-                    + "图形化规则编辑器将在后续版本提供。",
+                EmptyText = "还没有任何规则。点下面的「新建规则」开始添加。",
+                ItemAction = SettingAction.EditRule,
+                Buttons = [(SettingAction.AddRule, "新建规则")],
             },
             new InfoBlock
             {
@@ -521,38 +494,65 @@ public static class SettingsPages
         return string.Join("；或 ", parts);
     }
 
+    /// <summary>各配色方案的样本色。由宿主注入实际主题值，领域层不知道具体颜色。</summary>
+    public static Func<RailColorScheme, IReadOnlyList<(string Name, uint Argb)>>? SwatchProvider { get; set; }
+
     private static PageContent Colors(AppSettings s)
     {
-        _ = s;
+        var scheme = s.Appearance.ColorScheme;
+
+        var swatches = SwatchProvider?.Invoke(scheme)
+            ?? [("背景", 0xFFE8E8E8), ("活动标签", 0xFFFFFFFF)];
 
         return new PageContent
         {
             Page = SettingsPage.Colors,
             Title = "标签颜色",
-            Subtitle = "分组栏的配色跟随系统明暗主题。",
+            Subtitle = "分组栏的配色方案。",
             Blocks =
             [
                 new SectionBlock
                 {
-                    Title = "当前配色",
-                    Description = "分组栏使用矢量绘制，没有位图皮肤，因此在任何缩放比例下都保持清晰。",
+                    Title = "配色方案",
+                    Description = "只提供几套预设而不是逐色可调：分组栏上只有背景、活动标签、文字这几种颜色，"
+                        + "给每一种都配取色器，界面复杂度远超它带来的价值，而真正影响观感的只是浅底还是深底。",
                 },
-                new SwatchBlock
+                new ChoiceBlock
                 {
-                    Title = "分组栏",
-                    Description = "跟随系统的浅色/深色设置自动切换。",
-                    Swatches =
+                    Id = SettingId.ColorScheme,
+                    Value = (int)scheme,
+                    Options =
                     [
-                        ("背景", 0xFFE8E8E8),
-                        ("活动标签", 0xFFFFFFFF),
-                        ("活动文字", 0xFF1A1A1A),
-                        ("非活动文字", 0xFF606060),
+                        new ChoiceOption(
+                            (int)RailColorScheme.FollowSystem,
+                            "跟随系统",
+                            "随 Windows 的浅色/深色设置自动切换。",
+                            Illustration.RailAbove),
+                        new ChoiceOption(
+                            (int)RailColorScheme.Light,
+                            "浅色",
+                            "浅灰底、深色字。与深色 IDE、终端对比强烈，分组栏边界一眼可辨。",
+                            Illustration.TabsRounded),
+                        new ChoiceOption(
+                            (int)RailColorScheme.Dark,
+                            "深色",
+                            "深色底、浅色字。适合整体深色的桌面。",
+                            Illustration.TabsSquare),
                     ],
                 },
+
+                new SwatchBlock
+                {
+                    Title = "当前配色预览",
+                    Description = "分组栏为矢量绘制，没有位图皮肤，在任何缩放比例下都保持清晰。",
+                    Swatches = swatches,
+                },
+
                 new InfoBlock
                 {
-                    Text = "按分组、按应用自定义强调色的功能已在数据模型中就位"
-                        + "（每个分组与每个标签都可单独设色），图形化的取色界面将在后续版本提供。",
+                    Text = "单个分组与单个标签还可以有自己的强调色（在分组栏上点右键设置），"
+                        + "它会以一条细窄竖条的形式显示，不做大面积填充 —— "
+                        + "颜色服务于识别，不该成为装饰负担。",
                 },
             ],
         };
@@ -679,6 +679,10 @@ public static class SettingsPages
             SettingId.RoundedTabs => s with
             {
                 Appearance = s.Appearance with { RoundedTabs = value != 0 },
+            },
+            SettingId.ColorScheme => s with
+            {
+                Appearance = s.Appearance with { ColorScheme = (RailColorScheme)value },
             },
             SettingId.TabVisibility => s with
             {

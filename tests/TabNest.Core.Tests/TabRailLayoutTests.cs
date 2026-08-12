@@ -136,12 +136,18 @@ public sealed class TabRailLayoutTests
     // ------------------------------------------------------------------
 
     [Fact]
-    public void 仅活动标签显示关闭按钮()
+    public void 除从不显示外布局都为关闭按钮预留位置()
     {
-        var layout = Layout(3, CloseButtonPolicy.ActiveTabOnly);
+        // 布局只负责"位置在哪儿"，"此刻显不显示"交给 ShouldShowClose。
+        //
+        // 早期布局直接裁决：不该显示就把矩形留空。结果「悬停时显示」这一策略
+        // 依赖光标位置，而光标每动一下都重算整套布局代价太高，实际的结果是
+        // 编排层压根没传悬停标签进来 —— 该策略永远匹配不到，关闭按钮从不出现。
+        var activeOnly = Layout(3, CloseButtonPolicy.ActiveTabOnly);
+        var onHover = Layout(3, CloseButtonPolicy.OnHoverOnly);
 
-        Assert.True(layout.Tabs[0].CloseBounds.Width > 0);
-        Assert.Equal(0, layout.Tabs[1].CloseBounds.Width);
+        Assert.All(activeOnly.Tabs, t => Assert.True(t.CloseBounds.Width > 0));
+        Assert.All(onHover.Tabs, t => Assert.True(t.CloseBounds.Width > 0));
     }
 
     [Fact]
@@ -163,10 +169,14 @@ public sealed class TabRailLayoutTests
     [Fact]
     public void 仅悬停标签显示关闭按钮()
     {
-        var layout = Layout(3, CloseButtonPolicy.OnHoverOnly, hovered: TestData.Id(2));
+        var active = TestData.Id(1);
+        var hovered = TestData.Id(2);
 
-        Assert.Equal(0, layout.Tabs[0].CloseBounds.Width);
-        Assert.True(layout.Tabs[1].CloseBounds.Width > 0);
+        Assert.False(TabRailLayoutEngine.ShouldShowClose(
+            active, active, hovered, CloseButtonPolicy.OnHoverOnly));
+
+        Assert.True(TabRailLayoutEngine.ShouldShowClose(
+            hovered, active, hovered, CloseButtonPolicy.OnHoverOnly));
     }
 
     [Fact]

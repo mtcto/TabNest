@@ -159,6 +159,9 @@ internal static partial class Gdi
     [LibraryImport(Gdi32, SetLastError = true)]
     public static partial uint SetTextColor(nint hdc, uint color);
 
+    [LibraryImport(Gdi32, SetLastError = true)]
+    public static partial uint SetBkColor(nint hdc, uint color);
+
     [LibraryImport(User32Lib, EntryPoint = "DrawTextW", SetLastError = true,
         StringMarshalling = StringMarshalling.Utf16)]
     public static partial int DrawText(

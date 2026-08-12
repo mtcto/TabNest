@@ -1,5 +1,6 @@
 using TabNest.Core.Layout;
 using TabNest.Core.Models;
+using TabNest.Core.Rules;
 using TabNest.Interop;
 
 namespace TabNest.App.Settings;
@@ -31,6 +32,7 @@ public sealed class SettingsWindow : Win32Window
     private SettingsPage? _hoveredNav;
     private SettingId _hoveredToggle;
     private (int Block, int Option)? _hoveredCard;
+    private PixelPoint _pointerInContent = new(-1, -1);
     private bool _mouseTracked;
 
     /// <summary>
@@ -118,6 +120,10 @@ public sealed class SettingsWindow : Win32Window
                 OnClick(ToPoint(lParam));
                 return 0;
 
+            case Messages.RightButtonUp:
+                OnRightClick(ToPoint(lParam));
+                return 0;
+
             case Messages.DpiChanged:
                 Invalidate();
                 return 0;
@@ -191,6 +197,7 @@ public sealed class SettingsWindow : Win32Window
             HoveredNav = _hoveredNav,
             HoveredToggle = _hoveredToggle,
             HoveredCard = _hoveredCard,
+            PointerPosition = _pointerInContent,
         });
     }
 
@@ -227,11 +234,17 @@ public sealed class SettingsWindow : Win32Window
             ? FindHoveredCard(content, contentPoint)
             : null;
 
-        if (nav != _hoveredNav || toggle != _hoveredToggle || card != _hoveredCard)
+        var pointer = layout.ContentBounds.Contains(point)
+            ? contentPoint
+            : new PixelPoint(-1, -1);
+
+        if (nav != _hoveredNav || toggle != _hoveredToggle || card != _hoveredCard
+            || pointer != _pointerInContent)
         {
             _hoveredNav = nav;
             _hoveredToggle = toggle;
             _hoveredCard = card;
+            _pointerInContent = pointer;
             Invalidate();
         }
     }
@@ -308,6 +321,95 @@ public sealed class SettingsWindow : Win32Window
         if (content.HitTestChoice(contentPoint) is { } choice)
         {
             Apply(SettingsPages.Choose(_settings, choice.Id, choice.Value));
+            return;
+        }
+
+        if (content.HitTestList(contentPoint) is { } listAction)
+        {
+            HandleListAction(listAction.Action, listAction.Index);
+        }
+    }
+
+    /// <summary>
+    /// 右键：删除列表项。
+    ///
+    /// 删除是破坏性操作，刻意不放在左键点击能碰到的地方 ——
+    /// 用户点一行的本意是编辑它，把删除也放在那里迟早会误删。
+    /// </summary>
+    private void OnRightClick(PixelPoint point)
+    {
+        if (_layout is not { } layout || _content is not { } content)
+        {
+            return;
+        }
+
+        if (!layout.ContentBounds.Contains(point))
+        {
+            return;
+        }
+
+        if (content.HitTestList(ToContentPoint(point, layout)) is { } hit
+            && hit.Action is SettingAction.EditRule)
+        {
+            HandleListAction(SettingAction.DeleteRule, hit.Index);
+        }
+    }
+
+    /// <summary>处理列表上的动作：编辑/新建规则等。</summary>
+    private void HandleListAction(SettingAction action, int index)
+    {
+        switch (action)
+        {
+            case SettingAction.AddRule:
+                {
+                    var draft = new Rule
+                    {
+                        Id = $"r{DateTimeOffset.UtcNow.Ticks:X}",
+                        Name = "新规则",
+                        Action = RuleAction.Block,
+                        Conditions = [],
+                    };
+
+                    if (RuleEditorDialog.Show(Handle, draft, _theme) is { } created)
+                    {
+                        Apply(_settings with { Rules = [.. _settings.Rules, created] });
+                    }
+
+                    break;
+                }
+
+            case SettingAction.EditRule:
+                {
+                    if (index < 0 || index >= _settings.Rules.Count)
+                    {
+                        return;
+                    }
+
+                    if (RuleEditorDialog.Show(Handle, _settings.Rules[index], _theme) is { } edited)
+                    {
+                        var rules = _settings.Rules.ToList();
+                        rules[index] = edited;
+                        Apply(_settings with { Rules = rules });
+                    }
+
+                    break;
+                }
+
+            case SettingAction.DeleteRule:
+                {
+                    if (index < 0 || index >= _settings.Rules.Count)
+                    {
+                        return;
+                    }
+
+                    var rules = _settings.Rules.ToList();
+                    rules.RemoveAt(index);
+                    Apply(_settings with { Rules = rules });
+                    break;
+                }
+
+            default:
+                break;
         }
     }
 

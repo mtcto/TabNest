@@ -48,6 +48,30 @@ internal static partial class User32
     [LibraryImport(Lib)]
     public static partial short GetKeyState(int nVirtKey);
 
+    /// <summary>启用或禁用窗口。返回值是**之前是否被禁用**，容易读反。</summary>
+    [LibraryImport(Lib)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool EnableWindow(nint hWnd, [MarshalAs(UnmanagedType.Bool)] bool bEnable);
+
+    // ---- 窗口图标 ----
+
+    public const uint WM_GETICON = 0x007F;
+    public const nint ICON_SMALL = 0;
+    public const nint ICON_BIG = 1;
+
+    /// <summary>高 DPI 版本的小图标。优先取它，缩放下比 ICON_SMALL 清晰。</summary>
+    public const nint ICON_SMALL2 = 2;
+
+    public const int GCLP_HICON = -14;
+    public const int GCLP_HICONSM = -34;
+
+    [LibraryImport(Lib, EntryPoint = "GetClassLongPtrW", SetLastError = true)]
+    public static partial nint GetClassLongPtr(nint hWnd, int nIndex);
+
+    [LibraryImport(Lib, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool DestroyIcon(nint hIcon);
+
     [LibraryImport(Lib, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool RegisterHotKey(nint hWnd, int id, uint fsModifiers, uint vk);
@@ -194,6 +218,20 @@ internal static partial class User32
     [LibraryImport(Lib, EntryPoint = "PostMessageW", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool PostMessage(nint hWnd, uint Msg, nint wParam, nint lParam);
+
+    /// <summary>
+    /// 给**本进程内**的控件发消息。
+    ///
+    /// 用不带超时的版本是安全的：目标是我们自己创建的控件，运行在同一个 UI 线程上，
+    /// 不存在跨进程假死的风险。跨进程消息一律走上面的 SendMessageTimeout。
+    /// </summary>
+    [LibraryImport(Lib, EntryPoint = "SendMessageW", SetLastError = true)]
+    public static partial nint SendMessage(nint hWnd, uint Msg, nint wParam, nint lParam);
+
+    /// <summary>给控件发带字符串载荷的消息，例如往下拉框添加选项。</summary>
+    [LibraryImport(Lib, EntryPoint = "SendMessageW", SetLastError = true,
+        StringMarshalling = StringMarshalling.Utf16)]
+    public static partial nint SendMessageString(nint hWnd, uint Msg, nint wParam, string lParam);
 
     // ---- 显示器与 DPI ----
 

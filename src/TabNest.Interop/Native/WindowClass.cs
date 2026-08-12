@@ -143,6 +143,42 @@ internal static partial class WindowClass
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool GetClientRect(nint hWnd, out RECT lpRect);
 
+    // ---- 原生控件 ----
+    //
+    // 规则编辑器的输入框用原生 EDIT 而非自绘：自绘文本框必须自己实现输入法
+    // （WM_IME_COMPOSITION、候选窗定位、组合串下划线），而中文输入是必须能用的。
+    // 原生控件还天生带无障碍、键盘导航与焦点管理。
+
+    /// <summary>凹陷边框。文本框有它才看得出"这里可以输入"。</summary>
+    public const uint WS_EX_CLIENTEDGE = 0x00000200;
+
+    public const uint WS_CHILD = 0x40000000;
+    public const uint WS_VISIBLE = 0x10000000;
+    public const uint WS_TABSTOP = 0x00010000;
+    public const uint WS_VSCROLL = 0x00200000;
+
+    public const uint ES_AUTOHSCROLL = 0x0080;
+    public const uint CBS_DROPDOWNLIST = 0x0003;
+    public const uint BS_PUSHBUTTON = 0x0000;
+    public const uint BS_AUTOCHECKBOX = 0x0003;
+
+    public const uint CB_ADDSTRING = 0x0143;
+    public const uint CB_SETCURSEL = 0x014E;
+    public const uint CB_GETCURSEL = 0x0147;
+    public const uint BM_SETCHECK = 0x00F1;
+    public const uint BM_GETCHECK = 0x00F0;
+
+    /// <summary>WM_COMMAND：控件通知父窗口。按钮点击、下拉框选择变化都走它。</summary>
+    public const uint WM_COMMAND = 0x0111;
+
+    /// <summary>只读文本框的背景色回调。用它把原生控件配色调得与自绘外壳协调。</summary>
+    public const uint WM_CTLCOLOREDIT = 0x0133;
+    public const uint WM_CTLCOLORSTATIC = 0x0138;
+    public const uint WM_CTLCOLORBTN = 0x0135;
+
+    public const int BN_CLICKED = 0;
+    public const int CBN_SELCHANGE = 1;
+
     [LibraryImport(Lib, SetLastError = true)]
     public static partial nint GetDC(nint hWnd);
 

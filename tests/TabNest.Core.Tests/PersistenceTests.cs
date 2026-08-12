@@ -191,7 +191,7 @@ public sealed class PersistenceTests : IDisposable
             ClosedTabHistoryLimit = 25,
             Appearance = AppSettings.Default.Appearance with
             {
-                Visibility = TabVisibility.HideWhenMaximized,
+                Visibility = TabVisibility.AlwaysHidden,
                 CloseButton = CloseButtonPolicy.AllTabs,
             },
             Grouping = AppSettings.Default.Grouping with
@@ -217,7 +217,7 @@ public sealed class PersistenceTests : IDisposable
         Assert.False(loaded.Enabled);
         Assert.Equal(TaskbarButtonPolicy.ActiveOnly, loaded.TaskbarButtons);
         Assert.Equal(25, loaded.ClosedTabHistoryLimit);
-        Assert.Equal(TabVisibility.HideWhenMaximized, loaded.Appearance.Visibility);
+        Assert.Equal(TabVisibility.AlwaysHidden, loaded.Appearance.Visibility);
         Assert.Equal(DragTrigger.RequireShift, loaded.Grouping.Trigger);
         Assert.Equal("r1", Assert.Single(loaded.Rules).Id);
     }

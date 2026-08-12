@@ -28,6 +28,9 @@ public abstract class Win32Window : IDisposable
 
     protected static nint ModuleHandle { get; } = WindowClass.GetModuleHandle(null);
 
+    /// <summary>供 <see cref="NativeControl"/> 创建子控件时使用。</summary>
+    internal static nint ModuleHandleForControls => ModuleHandle;
+
     /// <summary>创建窗口。必须在拥有消息循环的线程上调用。</summary>
     protected void CreateWindow(
         string className,
@@ -367,6 +370,13 @@ public abstract class Win32Window : IDisposable
 
         /// <summary>系统设置变更广播。明暗主题切换靠它感知。</summary>
         public const uint SettingChange = WindowClass.WM_SETTINGCHANGE;
+
+        /// <summary>控件通知父窗口：按钮点击、下拉框选择变化。</summary>
+        public const uint Command = WindowClass.WM_COMMAND;
+
+        public const uint CtlColorEdit = WindowClass.WM_CTLCOLOREDIT;
+        public const uint CtlColorStatic = WindowClass.WM_CTLCOLORSTATIC;
+        public const uint CtlColorBtn = WindowClass.WM_CTLCOLORBTN;
     }
 
     /// <summary>普通窗口样式。设置中心用它，而不是轨道那种无边框弹出窗口。</summary>
@@ -377,6 +387,57 @@ public abstract class Win32Window : IDisposable
 
         /// <summary>绘制时跳过子窗口区域。宿主原生控件时必须带，否则会画到控件上造成闪烁。</summary>
         public const long ClipChildren = 0x02000000;
+
+        public const long Caption = 0x00C00000;
+        public const long SysMenu = 0x00080000;
+
+        /// <summary>对话框边框：不可缩放。规则编辑器的布局是固定的，允许缩放只会露出空白。</summary>
+        public const long DialogFrame = 0x00400000;
+    }
+
+    /// <summary>取窗口 DPI，供对话框按所有者的缩放布局。</summary>
+    public static class User32Dpi
+    {
+        public static uint ForWindow(nint hwnd) => User32.GetDpiForWindow(hwnd);
+    }
+
+    /// <summary>启用或禁用窗口。模态对话框靠它锁住所有者。</summary>
+    public static class User32Modal
+    {
+        /// <returns>之前是否处于启用状态。</returns>
+        public static bool Enable(nint hwnd, bool enable) => !User32.EnableWindow(hwnd, enable);
+    }
+
+    /// <summary>
+    /// 调整原生控件的配色，让它与自绘外壳协调。
+    ///
+    /// 不做这件事的话，暗色主题下会是"深色面板上一块块刺眼的白底控件"。
+    /// </summary>
+    public static class ControlColors
+    {
+        /// <summary>设置控件的前景与背景色，返回用作背景的画刷句柄。</summary>
+        public static nint Apply(nint hdc, uint textArgb, uint backgroundArgb, nint existingBrush)
+        {
+            Gdi.SetTextColor(hdc, Gdi.ToColorRef(textArgb));
+            Gdi.SetBkColor(hdc, Gdi.ToColorRef(backgroundArgb));
+
+            // 画刷要复用：每次 WM_CTLCOLOR 都新建一个而不释放，
+            // 会以重绘的频率泄漏 GDI 对象，几分钟就能耗尽句柄配额。
+            if (existingBrush != 0)
+            {
+                return existingBrush;
+            }
+
+            return Gdi.CreateSolidBrush(Gdi.ToColorRef(backgroundArgb));
+        }
+
+        public static void ReleaseBrush(nint brush)
+        {
+            if (brush != 0)
+            {
+                Gdi.DeleteObject(brush);
+            }
+        }
     }
 
     /// <summary>WM_GETMINMAXINFO 的载荷写入。避免上层直接触碰非托管结构。</summary>

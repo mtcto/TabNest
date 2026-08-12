@@ -31,6 +31,9 @@ public enum SettingId
     HideMenuButton,
     DisableAnimation,
 
+    // 标签颜色
+    ColorScheme,
+
     // 分组规则
     HotkeysEnabled,
 
@@ -158,6 +161,41 @@ public sealed record ListBlock : ContentBlock
 
     /// <summary>列表为空时显示的话。必须写清"没有"和"怎么加"。</summary>
     public required string EmptyText { get; init; }
+
+    /// <summary>
+    /// 行是否可点击（用于编辑）。为空表示这是只读列表。
+    /// 每行对应的动作标识由 <see cref="ItemAction"/> 给出。
+    /// </summary>
+    public SettingAction? ItemAction { get; init; }
+
+    /// <summary>列表下方的操作按钮，例如「新建规则」。</summary>
+    public IReadOnlyList<(SettingAction Action, string Text)> Buttons { get; init; } = [];
+}
+
+/// <summary>
+/// 列表类内容上的动作。
+///
+/// 与 <see cref="SettingId"/> 分开：后者标识"一个设置字段"，
+/// 而这里标识"一个操作"，两者混用会让写回逻辑分不清该改字段还是该执行动作。
+/// </summary>
+public enum SettingAction
+{
+    None = 0,
+
+    /// <summary>编辑第 N 条规则。</summary>
+    EditRule,
+
+    /// <summary>新建一条规则。</summary>
+    AddRule,
+
+    /// <summary>删除第 N 条规则。</summary>
+    DeleteRule,
+
+    /// <summary>删除第 N 个已保存分组。</summary>
+    DeleteWorkspace,
+
+    /// <summary>恢复第 N 个已保存分组。</summary>
+    RestoreWorkspace,
 }
 
 /// <summary>一块颜色样本，用于颜色页展示当前配色。</summary>

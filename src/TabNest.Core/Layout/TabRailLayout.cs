@@ -97,16 +97,10 @@ public static class RailAppearance
     /// 依据可见性策略判断此刻是否应当显示分组栏。
     /// </summary>
     /// <param name="visibility">用户选择的策略。</param>
-    /// <param name="isOwnerForeground">承载窗口当前是否为前台窗口。</param>
-    /// <param name="isOwnerMaximized">承载窗口是否最大化。</param>
-    /// <param name="isPointerNearTop">光标是否停在屏幕顶部区域（用于隐藏模式下的浮出）。</param>
     /// <param name="liveTabCount">组内存活标签数。</param>
     /// <param name="hideWhenSingleTab">只有一个标签时是否隐藏。</param>
     public static bool ShouldShowRail(
         TabVisibility visibility,
-        bool isOwnerForeground,
-        bool isOwnerMaximized,
-        bool isPointerNearTop,
         int liveTabCount,
         bool hideWhenSingleTab)
     {
@@ -121,17 +115,10 @@ public static class RailAppearance
             return false;
         }
 
-        return visibility switch
-        {
-            TabVisibility.AlwaysVisible => true,
-            TabVisibility.ActiveWindowOnly => isOwnerForeground,
-
-            // 最大化时隐藏，但光标移到屏幕顶部要能浮出来 ——
-            // 否则最大化之后就再也切不了标签，只能先还原窗口。
-            TabVisibility.HideWhenMaximized => !isOwnerMaximized || isPointerNearTop,
-
-            _ => isPointerNearTop,
-        };
+        // 「始终隐藏」就是**始终**隐藏，不因光标靠近而浮出。
+        // 早期让它悬停浮出，用户实测反馈是选了始终隐藏却时不时冒出来，
+        // 既不符合字面意思也打断视线。
+        return visibility is TabVisibility.AlwaysVisible;
     }
 }
 
@@ -338,18 +325,21 @@ public static class TabRailLayoutEngine
                     bounds.Left + metrics.SidePadding, iconTop, metrics.IconSize, metrics.IconSize)
                 : PixelRect.FromSize(bounds.Left + metrics.SidePadding, iconTop, 0, 0);
 
-            var showClose = ShouldShowClose(tab, activeIdentity, hoveredIdentity, showCloseOn);
-            var closeBounds = PixelRect.Empty;
-
-            if (showClose)
-            {
-                var closeTop = (metrics.Height - metrics.CloseButtonSize) / 2;
-                closeBounds = PixelRect.FromSize(
+            // 关闭按钮的**位置**始终算出来，显示与否留给渲染与命中时判断。
+            //
+            // 早期是在这里就裁决好：不该显示就把矩形留空。但「悬停时显示」这一策略
+            // 依赖光标位置，而光标每动一下都重算整套布局代价太高，实际的结果是
+            // 编排层压根没传悬停标签进来 —— 于是该策略永远匹配不到，关闭按钮从不出现。
+            //
+            // 把"在哪儿"与"显不显示"分开之后，悬停变化只需重绘，不必重新布局。
+            var closeTop = (metrics.Height - metrics.CloseButtonSize) / 2;
+            var closeBounds = showCloseOn is CloseButtonPolicy.Never
+                ? PixelRect.Empty
+                : PixelRect.FromSize(
                     bounds.Right - metrics.SidePadding - metrics.CloseButtonSize,
                     closeTop,
                     metrics.CloseButtonSize,
                     metrics.CloseButtonSize);
-            }
 
             // 文本区域夹在图标和关闭按钮之间。关闭按钮隐藏时也预留它的宽度，
             // 否则悬停时按钮出现会把标题挤得跳动一下。
@@ -440,16 +430,22 @@ public static class TabRailLayoutEngine
             or >= '＀' and <= '｠'
             or >= '￠' and <= '￦');
 
-    private static bool ShouldShowClose(
-        TabItem tab,
+    /// <summary>
+    /// 某个标签此刻是否应当显示关闭按钮。
+    ///
+    /// 渲染与命中都调它，保证"画出来的"和"点得到的"永远一致 ——
+    /// 两处各自判断是自绘 UI 里最容易出现、也最难查的一类不一致。
+    /// </summary>
+    public static bool ShouldShowClose(
+        WindowIdentity tab,
         WindowIdentity activeIdentity,
         WindowIdentity? hoveredIdentity,
         CloseButtonPolicy policy) => policy switch
         {
             CloseButtonPolicy.Never => false,
             CloseButtonPolicy.AllTabs => true,
-            CloseButtonPolicy.ActiveTabOnly => tab.Identity == activeIdentity,
-            CloseButtonPolicy.OnHoverOnly => hoveredIdentity.HasValue && tab.Identity == hoveredIdentity.Value,
+            CloseButtonPolicy.ActiveTabOnly => tab == activeIdentity,
+            CloseButtonPolicy.OnHoverOnly => hoveredIdentity.HasValue && tab == hoveredIdentity.Value,
             _ => false,
         };
 }

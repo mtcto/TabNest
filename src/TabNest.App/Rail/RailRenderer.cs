@@ -33,6 +33,12 @@ public sealed record RailRenderState
 
     /// <summary>拖动标签重排是否需要按住修饰键。防止在标签栏上误拖导致顺序变乱。</summary>
     public bool RequireModifierToMoveTabs { get; init; }
+
+    /// <summary>关闭按钮显示策略。渲染与命中都按它判断，布局侧不再预先裁决。</summary>
+    public CloseButtonPolicy CloseButton { get; init; } = CloseButtonPolicy.ActiveTabOnly;
+
+    /// <summary>按窗口句柄取图标。为 null 时不绘制图标。</summary>
+    public Func<WindowIdentity, nint>? IconProvider { get; init; }
 }
 
 /// <summary>
@@ -88,14 +94,20 @@ internal static class RailRenderer
         var isActive = tab.Identity == state.ActiveIdentity;
         var isHovered = state.HoveredIdentity == tab.Identity;
 
-        if (isActive || isHovered)
-        {
-            // 半径为 0 时 FillRoundRect 会退化成 FillRect，正是「传统（直角）」标签样式。
-            canvas.FillRoundRect(
-                layout.Bounds,
-                isActive ? theme.ActiveTabBackground : theme.HoverTabBackground,
-                state.RoundedTabs ? TabCornerRadius : 0);
-        }
+        // 半径为 0 时 FillRoundRect 会退化成 FillRect，正是「传统（直角）」标签样式。
+        var radius = state.RoundedTabs ? TabCornerRadius : 0;
+
+        // **每个标签都画出形状**，不只是活动与悬停的那个。
+        //
+        // 早期只给活动/悬停标签填背景，其余留空。后果是「标签样式：传统 / 圆形」
+        // 这个设置几乎看不出区别 —— 全条分组栏上只有一个标签有形状，
+        // 改它的圆角自然没什么可看的。给非活动标签一个比背景略深的底之后，
+        // 每个标签的轮廓都在，圆角与直角一眼可辨，标签边界也清楚多了。
+        var fill = isActive
+            ? theme.ActiveTabBackground
+            : isHovered ? theme.HoverTabBackground : theme.InactiveTabBackground;
+
+        canvas.FillRoundRect(layout.Bounds, fill, radius);
 
         // 组颜色只画一条细窄竖条，不做大面积填充 —— 颜色服务于识别，不该成为装饰负担。
         if (tab.AccentColor is { } accent)
@@ -114,11 +126,27 @@ internal static class RailRenderer
             ? theme.DegradedText
             : isActive ? theme.ActiveText : theme.InactiveText;
 
+        // 窗口图标。图标区宽度为 0 表示用户关掉了这一项，此时布局也已收回它的位置。
+        if (layout.IconBounds.Width > 0 && state.IconProvider is { } provider)
+        {
+            var icon = provider(tab.Identity);
+
+            if (icon != 0)
+            {
+                canvas.DrawIcon(icon, layout.IconBounds);
+            }
+        }
+
         var title = tab.IsResponding ? tab.DisplayTitle : $"{tab.DisplayTitle}（无响应）";
         canvas.DrawText(title, layout.TextBounds, textColor, state.Dpi);
 
+        // 关闭按钮的显示与否由策略 + 悬停共同决定，与命中测试调用同一个判定，
+        // 保证"画出来的"和"点得到的"永远一致。
+        var showClose = layout.CloseBounds.Width > 0
+            && TabRailLayoutEngine.ShouldShowClose(
+                tab.Identity, state.ActiveIdentity, state.HoveredIdentity, state.CloseButton);
 
-        if (layout.CloseBounds.Width > 0)
+        if (showClose)
         {
             if (state.HoveredCloseIdentity == tab.Identity)
             {

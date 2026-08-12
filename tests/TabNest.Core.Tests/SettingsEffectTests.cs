@@ -103,17 +103,22 @@ public sealed class SettingsEffectTests
     }
 
     [Fact]
-    public void 关闭按钮策略改变关闭按钮的出现()
+    public void 关闭按钮策略决定各标签是否显示关闭按钮()
     {
-        var activeOnly = LayoutWith(Defaults with { CloseButton = CloseButtonPolicy.ActiveTabOnly });
-        var never = LayoutWith(Defaults with { CloseButton = CloseButtonPolicy.Never });
-        var all = LayoutWith(Defaults with { CloseButton = CloseButtonPolicy.AllTabs });
+        var active = TestData.Id(1);
+        var other = TestData.Id(2);
 
-        Assert.All(never.Tabs, t => Assert.Equal(0, t.CloseBounds.Width));
-        Assert.All(all.Tabs, t => Assert.True(t.CloseBounds.Width > 0));
+        Assert.False(TabRailLayoutEngine.ShouldShowClose(
+            other, active, null, CloseButtonPolicy.Never));
 
-        // 仅活动标签：有且仅有一个标签带关闭按钮。
-        Assert.Equal(1, activeOnly.Tabs.Count(t => t.CloseBounds.Width > 0));
+        Assert.True(TabRailLayoutEngine.ShouldShowClose(
+            other, active, null, CloseButtonPolicy.AllTabs));
+
+        Assert.True(TabRailLayoutEngine.ShouldShowClose(
+            active, active, null, CloseButtonPolicy.ActiveTabOnly));
+
+        Assert.False(TabRailLayoutEngine.ShouldShowClose(
+            other, active, null, CloseButtonPolicy.ActiveTabOnly));
     }
 
     [Fact]
@@ -140,48 +145,36 @@ public sealed class SettingsEffectTests
     // ------------------------------------------------------------------
 
     [Theory]
-    [InlineData(TabVisibility.AlwaysVisible, false, false, false, true)]
-    [InlineData(TabVisibility.ActiveWindowOnly, true, false, false, true)]
-    [InlineData(TabVisibility.ActiveWindowOnly, false, false, false, false)]
-    [InlineData(TabVisibility.HideWhenMaximized, false, true, false, false)]
-    [InlineData(TabVisibility.HideWhenMaximized, false, false, false, true)]
-    [InlineData(TabVisibility.AlwaysHidden, true, false, false, false)]
-    [InlineData(TabVisibility.AlwaysHidden, true, false, true, true)]
-    public void 可见性策略决定分组栏是否显示(
-        TabVisibility visibility, bool foreground, bool maximized, bool nearTop, bool expected)
+    [InlineData(TabVisibility.AlwaysVisible, true)]
+    [InlineData(TabVisibility.AlwaysHidden, false)]
+    public void 可见性策略决定分组栏是否显示(TabVisibility visibility, bool expected)
     {
         var actual = RailAppearance.ShouldShowRail(
-            visibility, foreground, maximized, nearTop, liveTabCount: 2, hideWhenSingleTab: false);
+            visibility, liveTabCount: 2, hideWhenSingleTab: false);
 
         Assert.Equal(expected, actual);
     }
 
     [Fact]
-    public void 最大化隐藏时光标移到顶部仍能浮出()
+    public void 始终隐藏就是始终隐藏不因任何条件浮出()
     {
-        // 不给浮出机会的话，窗口一最大化就再也切不了标签，只能先还原窗口。
-        var hidden = RailAppearance.ShouldShowRail(
-            TabVisibility.HideWhenMaximized, true, isOwnerMaximized: true,
-            isPointerNearTop: false, liveTabCount: 2, hideWhenSingleTab: false);
+        // 用户实测反馈：选了「始终隐藏」却因鼠标靠近而冒出来，
+        // 既不符合字面意思也打断视线。现在它只有一种行为。
+        Assert.False(RailAppearance.ShouldShowRail(
+            TabVisibility.AlwaysHidden, liveTabCount: 2, hideWhenSingleTab: false));
 
-        var floated = RailAppearance.ShouldShowRail(
-            TabVisibility.HideWhenMaximized, true, isOwnerMaximized: true,
-            isPointerNearTop: true, liveTabCount: 2, hideWhenSingleTab: false);
-
-        Assert.False(hidden);
-        Assert.True(floated);
+        Assert.False(RailAppearance.ShouldShowRail(
+            TabVisibility.AlwaysHidden, liveTabCount: 5, hideWhenSingleTab: false));
     }
 
     [Fact]
     public void 单标签隐藏优先于任何可见性策略()
     {
         var shown = RailAppearance.ShouldShowRail(
-            TabVisibility.AlwaysVisible, true, false, false,
-            liveTabCount: 1, hideWhenSingleTab: false);
+            TabVisibility.AlwaysVisible, liveTabCount: 1, hideWhenSingleTab: false);
 
         var hidden = RailAppearance.ShouldShowRail(
-            TabVisibility.AlwaysVisible, true, false, false,
-            liveTabCount: 1, hideWhenSingleTab: true);
+            TabVisibility.AlwaysVisible, liveTabCount: 1, hideWhenSingleTab: true);
 
         Assert.True(shown);
         Assert.False(hidden);
@@ -191,8 +184,125 @@ public sealed class SettingsEffectTests
     public void 组内没有标签时绝不显示分组栏()
     {
         Assert.False(RailAppearance.ShouldShowRail(
-            TabVisibility.AlwaysVisible, true, false, true,
-            liveTabCount: 0, hideWhenSingleTab: false));
+            TabVisibility.AlwaysVisible, liveTabCount: 0, hideWhenSingleTab: false));
+    }
+
+    // ------------------------------------------------------------------
+    // 关闭按钮策略：画出来的与点得到的必须一致
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 悬停时显示策略只对被悬停的标签成立()
+    {
+        var active = TestData.Id(1);
+        var other = TestData.Id(2);
+
+        // 没有悬停任何标签时，一个都不显示。
+        Assert.False(TabRailLayoutEngine.ShouldShowClose(
+            active, active, null, CloseButtonPolicy.OnHoverOnly));
+
+        // 悬停在非活动标签上时，显示的是那一个而不是活动标签。
+        Assert.True(TabRailLayoutEngine.ShouldShowClose(
+            other, active, other, CloseButtonPolicy.OnHoverOnly));
+
+        Assert.False(TabRailLayoutEngine.ShouldShowClose(
+            active, active, other, CloseButtonPolicy.OnHoverOnly));
+    }
+
+    [Fact]
+    public void 悬停策略下布局仍要为关闭按钮留出位置()
+    {
+        // 布局若按"当前不该显示"就把矩形留空，悬停时就没有位置可画 ——
+        // 这正是「悬停时显示」此前完全不生效的原因。
+        var layout = Compute(
+            [Tab(1, "一"), Tab(2, "二")],
+            Defaults with { CloseButton = CloseButtonPolicy.OnHoverOnly });
+
+        Assert.All(layout.Tabs, t => Assert.True(
+            t.CloseBounds.Width > 0,
+            "悬停策略下布局没有为关闭按钮留位置，悬停时将无处可画"));
+    }
+
+    [Fact]
+    public void 从不显示策略下布局不留关闭按钮位置()
+    {
+        var layout = Compute(
+            [Tab(1, "一"), Tab(2, "二")],
+            Defaults with { CloseButton = CloseButtonPolicy.Never });
+
+        Assert.All(layout.Tabs, t => Assert.Equal(0, t.CloseBounds.Width));
+    }
+
+    // ------------------------------------------------------------------
+    // 配色方案
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 配色方案已接线且三种取值互不相同()
+    {
+        var defaults = AppSettings.Default;
+
+        var light = SettingsPages.Choose(defaults, SettingId.ColorScheme, (int)RailColorScheme.Light);
+        var dark = SettingsPages.Choose(defaults, SettingId.ColorScheme, (int)RailColorScheme.Dark);
+
+        Assert.Equal(RailColorScheme.Light, light.Appearance.ColorScheme);
+        Assert.Equal(RailColorScheme.Dark, dark.Appearance.ColorScheme);
+        Assert.NotEqual(light.Appearance.ColorScheme, dark.Appearance.ColorScheme);
+    }
+
+    // ------------------------------------------------------------------
+    // 规则编辑：空条件规则绝不能生效
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 没有条件的规则永不匹配()
+    {
+        // 三个维度全空的条件会匹配**任何**窗口。一条空的阻止规则等于禁用整个产品，
+        // 因此规则编辑器保存时会把空条件丢掉，让规则退化成"没有条件"。
+        var rule = new Rules.Rule
+        {
+            Id = "r1",
+            Name = "空规则",
+            Action = Rules.RuleAction.Block,
+            Conditions = [],
+        };
+
+        Assert.False(rule.IsUsable);
+        Assert.False(rule.Matches("any.exe", "AnyClass", "任意标题"));
+    }
+
+    [Fact]
+    public void 规则页把没有条件的规则标记出来()
+    {
+        var settings = AppSettings.Default with
+        {
+            Rules =
+            [
+                new Rules.Rule
+                {
+                    Id = "r1",
+                    Name = "空规则",
+                    Action = Rules.RuleAction.Block,
+                    Conditions = [],
+                },
+            ],
+        };
+
+        var page = SettingsPages.Build(SettingsPage.Rules, settings);
+        var list = page.Blocks.OfType<ListBlock>().First(b => b.Title == "当前规则");
+
+        // 用户必须看得出这条规则不会生效，否则他会以为规则坏了。
+        Assert.Contains(list.Items, i => i.Primary.Contains("不会生效", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void 规则列表可编辑且提供新建入口()
+    {
+        var page = SettingsPages.Build(SettingsPage.Rules, AppSettings.Default);
+        var list = page.Blocks.OfType<ListBlock>().First(b => b.Title == "当前规则");
+
+        Assert.Equal(SettingAction.EditRule, list.ItemAction);
+        Assert.Contains(list.Buttons, b => b.Action == SettingAction.AddRule);
     }
 
     // ------------------------------------------------------------------

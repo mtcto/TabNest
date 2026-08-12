@@ -282,6 +282,21 @@ internal sealed class InteractiveHost : IDisposable
     {
         try
         {
+            // 配色样本由宿主注入 —— 领域层不知道具体颜色值。
+            Core.Layout.SettingsPages.SwatchProvider = scheme =>
+            {
+                var t = Rail.RailTheme.For(scheme);
+
+                return
+                [
+                    ("背景", t.Background),
+                    ("活动标签", t.ActiveTabBackground),
+                    ("非活动标签", t.InactiveTabBackground),
+                    ("活动文字", t.ActiveText),
+                    ("非活动文字", t.InactiveText),
+                ];
+            };
+
             // 已保存分组由宿主注入 —— 领域层不读磁盘。
             Core.Layout.SettingsPages.SavedWorkspaceRows =
             [

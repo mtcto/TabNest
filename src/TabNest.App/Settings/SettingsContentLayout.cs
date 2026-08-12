@@ -259,7 +259,30 @@ public sealed record ContentLayout
                             }
                         }
 
+                        // 列表下方的操作按钮（例如「新建规则」）。
+                        var buttonRects = new List<PixelRect>(list.Buttons.Count);
+
+                        if (list.Buttons.Count > 0)
+                        {
+                            rowTop += m.RowTextGap;
+                            var bx = left + pad;
+
+                            foreach (var (_, text) in list.Buttons)
+                            {
+                                var w = canvas.MeasureTextWidth(text, TextStyle.Body, dpi) + (pad * 2);
+                                buttonRects.Add(PixelRect.FromSize(bx, rowTop, w, m.ToggleHeight + 8));
+                                bx += w + m.CardGap;
+                            }
+
+                            rowTop += m.ToggleHeight + 8;
+                        }
+
                         var bottom = rowTop + pad;
+
+                        // 按钮矩形接在行矩形之后，命中时按序号区分。
+                        var all = new List<PixelRect>(rows.Count + buttonRects.Count);
+                        all.AddRange(rows);
+                        all.AddRange(buttonRects);
 
                         blocks.Add(new BlockLayout(
                             block,
@@ -267,7 +290,7 @@ public sealed record ContentLayout
                             titleRect,
                             PixelRect.Empty,
                             PixelRect.Empty,
-                            rows));
+                            all));
 
                         y = bottom + m.RowGap;
                         break;
@@ -376,6 +399,47 @@ public sealed record ContentLayout
         }
 
         return SettingId.None;
+    }
+
+    /// <summary>
+    /// 命中测试列表：返回被点中的动作与序号。
+    /// 序号对列表行是行号，对按钮无意义（按钮动作本身已唯一）。
+    /// </summary>
+    public (SettingAction Action, int Index)? HitTestList(PixelPoint point)
+    {
+        foreach (var b in Blocks)
+        {
+            if (b.Block is not ListBlock list)
+            {
+                continue;
+            }
+
+            var rowCount = list.Items.Count == 0 ? 1 : list.Items.Count;
+
+            for (var i = 0; i < b.Options.Count; i++)
+            {
+                if (!b.Options[i].Contains(point))
+                {
+                    continue;
+                }
+
+                // 前 rowCount 个是列表行，其后是按钮。
+                if (i < rowCount)
+                {
+                    return list.ItemAction is { } action && list.Items.Count > 0
+                        ? (action, i)
+                        : null;
+                }
+
+                var buttonIndex = i - rowCount;
+
+                return buttonIndex < list.Buttons.Count
+                    ? (list.Buttons[buttonIndex].Action, buttonIndex)
+                    : null;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>命中测试选择卡片，返回被点中的设置项与取值。</summary>

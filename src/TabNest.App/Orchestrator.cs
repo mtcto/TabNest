@@ -145,6 +145,10 @@ internal sealed class Orchestrator : IDisposable
                 OnWindowVanished(evt.Handle);
                 break;
 
+            case WindowEventKind.Shown:
+                OnWindowShown(evt.Handle);
+                break;
+
             case WindowEventKind.NameChanged:
                 OnTitleChanged(evt.Handle);
                 break;
@@ -226,6 +230,62 @@ internal sealed class Orchestrator : IDisposable
 
         FileLog.Info($"成员窗口已消失（隐藏或销毁），移出分组：{DescribeWindow(hwnd)}");
         Apply(_manager.OnWindowDestroyed(tab.Identity), group.Id);
+    }
+
+    /// <summary>
+    /// 新窗口出现。用于「自动把同类窗口合并到一组」。
+    ///
+    /// 只在用户显式开启该项时才动作 —— 自动分组很容易被理解为"窗口被抢走了"，
+    /// 因此默认关闭，且只在**已有同应用的组**时才加入，绝不主动新建组：
+    /// 主动建组意味着用户开两个记事本就突然被合并，那是惊吓而不是便利。
+    /// </summary>
+    private void OnWindowShown(nint hwnd)
+    {
+        if (!_settings.Enabled || !_settings.Grouping.AutoGroupIdenticalWindows)
+        {
+            return;
+        }
+
+        if (_manager.IsGrouped(new WindowIdentity(hwnd, 0, 0)) || FindGroupByHandle(hwnd) is not null)
+        {
+            return;
+        }
+
+        var window = _enumerator.Describe(hwnd);
+
+        if (window is null || _manager.IsGrouped(window.Identity))
+        {
+            return;
+        }
+
+        // 资格判定与手动分组同一套：被规则挡下的窗口不该被自动分组绕过去。
+        var eligibility = EligibilityEvaluator.Evaluate(window, BuildEligibilityContext());
+
+        if (!eligibility.IsEligible)
+        {
+            return;
+        }
+
+        // 找一个已有的、同应用的组。找不到就什么也不做。
+        var target = _manager.Groups.FirstOrDefault(g =>
+            g.LiveTabs.Any(t =>
+                string.Equals(t.ProcessName, window.ProcessName, StringComparison.OrdinalIgnoreCase)));
+
+        if (target is null)
+        {
+            return;
+        }
+
+        var snapshot = WindowController.CaptureSnapshot(hwnd);
+
+        if (snapshot is null)
+        {
+            // 没有快照就没有还原依据，宁可不接管。
+            return;
+        }
+
+        FileLog.Info($"自动分组：把「{window.Title}」并入组 {target.Id}。");
+        Apply(_manager.AddTab(target.Id, new TabCandidate(window, snapshot)), target.Id);
     }
 
     /// <summary>
@@ -590,6 +650,16 @@ internal sealed class Orchestrator : IDisposable
 
     /// <summary>窗口圆角半径缓存。避免拖动时每帧查询 DWM 属性。</summary>
     private readonly Dictionary<nint, int> _cornerRadiusCache = [];
+
+    /// <summary>窗口图标缓存。取图标要跨进程发消息甚至读盘，每帧现取会拖垮拖动。</summary>
+    private readonly WindowIconCache _iconCache = new();
+
+    /// <summary>供渲染器按需取图标。返回 0 时渲染器跳过绘制，而不是画一个占位方块。</summary>
+    private nint ResolveIcon(WindowIdentity identity)
+    {
+        var path = _enumerator.Describe(identity.Handle)?.ProcessPath;
+        return _iconCache.GetIcon(identity.Handle, path);
+    }
 
     private static bool Near(PixelRect a, PixelRect b, int tolerance) =>
         Math.Abs(a.Left - b.Left) <= tolerance
@@ -1996,13 +2066,9 @@ internal sealed class Orchestrator : IDisposable
             with { TopCornerRadius = cornerRadius };
 
         // 可见性策略：不该显示时把分组栏藏起来，而不是不刷新它。
-        var owner = active.Identity.Handle;
         var shouldShow = RailAppearance.ShouldShowRail(
             appearance.Visibility,
-            isOwnerForeground: WindowEnumerator.ForegroundWindow() == owner,
-            isOwnerMaximized: WindowEnumerator.IsMaximized(owner),
-            isPointerNearTop: IsPointerNearRail(anchor, metrics.Height),
-            liveTabCount: group.LiveTabCount,
+            group.LiveTabCount,
             appearance.HideWhenSingleTab);
 
         if (!shouldShow)
@@ -2033,11 +2099,13 @@ internal sealed class Orchestrator : IDisposable
                 Layout = layout,
                 Tabs = group.Tabs,
                 ActiveIdentity = active.Identity,
-                Theme = RailTheme.Default,
+                Theme = RailTheme.For(appearance.ColorScheme),
                 Dpi = dpi,
                 RoundedTabs = appearance.RoundedTabs,
                 ShowBackgroundBar = appearance.ShowBackgroundBar,
                 RequireModifierToMoveTabs = _settings.Grouping.RequireModifierToMoveTabs,
+                CloseButton = appearance.CloseButton,
+                IconProvider = appearance.ShowWindowIcon ? ResolveIcon : null,
             },
             ownerHwnd: active.Identity.Handle);
 
@@ -2049,27 +2117,6 @@ internal sealed class Orchestrator : IDisposable
                 $"分组栏刷新耗时 {railStart.ElapsedMilliseconds}ms"
                 + $"（组 {group.Id}，{group.LiveTabCount} 个标签）");
         }
-    }
-
-    /// <summary>
-    /// 光标是否停在分组栏应当浮出的区域。
-    ///
-    /// 判定范围比分组栏本身高一些：分组栏隐藏时它并不占位，
-    /// 只按分组栏自身高度判定的话，用户得把光标精确停在一条看不见的窄带上才能唤出它。
-    /// </summary>
-    private static bool IsPointerNearRail(PixelRect anchor, int railHeight)
-    {
-        if (!User32Cursor.TryGet(out var cursor))
-        {
-            return false;
-        }
-
-        var band = Math.Max(railHeight, 8) * 2;
-
-        return cursor.X >= anchor.Left
-            && cursor.X < anchor.Right
-            && cursor.Y >= anchor.Top - band
-            && cursor.Y < anchor.Top + band;
     }
 
     private TabRailWindow GetOrCreateRail(string groupId)

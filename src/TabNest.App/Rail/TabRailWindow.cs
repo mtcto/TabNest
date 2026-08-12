@@ -260,7 +260,13 @@ internal sealed class TabRailWindow : Win32Window
         }
 
         var hoveredTab = state.Layout.HitTestTab(point)?.Identity;
-        var hoveredClose = state.Layout.HitTestCloseButton(point)?.Identity;
+
+        var closeCandidate = state.Layout.HitTestCloseButton(point)?.Identity;
+        var hoveredClose = closeCandidate is { } candidate
+            && TabRailLayoutEngine.ShouldShowClose(
+                candidate, state.ActiveIdentity, state.HoveredIdentity, state.CloseButton)
+            ? candidate
+            : (WindowIdentity?)null;
         var hoveredCloseGroup = state.Layout.CloseGroupButton.Width > 0
             && state.Layout.CloseGroupButton.Contains(point);
 
@@ -384,7 +390,11 @@ internal sealed class TabRailWindow : Win32Window
             return;
         }
 
-        if (state.Layout.HitTestCloseButton(point) is { } closing)
+        // 关闭按钮此刻是否可点，用与绘制**完全相同**的判定。
+        // 两处各自判断是自绘 UI 里最难查的一类不一致：看得见却点不到，或看不见却点得到。
+        if (state.Layout.HitTestCloseButton(point) is { } closing
+            && TabRailLayoutEngine.ShouldShowClose(
+                closing.Identity, state.ActiveIdentity, state.HoveredIdentity, state.CloseButton))
         {
             Emit(RailAction.CloseTab, closing.Identity);
             return;

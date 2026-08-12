@@ -12,17 +12,26 @@ public enum TabHostingMode
     IntegratedTitleBar = 1,
 }
 
-/// <summary>标签轨道的可见性策略。对齐 Groupy 标签外观页的四选一。</summary>
+/// <summary>
+/// 标签栏可见性策略。
+///
+/// 刻意只保留两项。Groupy 提供四项（含"仅活动窗口""最大化时隐藏"），
+/// 但那两项都依赖"光标移到顶部就浮出"这一行为，实际用起来分组栏会不断闪进闪出，
+/// 而用户想要的往往就是干脆的"要么一直在，要么一直不在"。
+/// 多出来的两档只是让人挑花眼，并没有对应真实需求。
+/// </summary>
 public enum TabVisibility
 {
     AlwaysVisible = 0,
-    ActiveWindowOnly = 1,
 
-    /// <summary>窗口最大化时隐藏，鼠标移到屏幕顶部才显示。避免轨道遮挡最大化窗口的内容。</summary>
-    HideWhenMaximized = 2,
-
-    /// <summary>始终隐藏，仅在悬停到窗口顶部时显示。</summary>
-    AlwaysHidden = 3,
+    /// <summary>
+    /// 始终隐藏，**不因光标悬停而浮出**。
+    ///
+    /// 分组关系照常生效（切换、整组移动、热键都能用），只是不占用屏幕空间。
+    /// 早期版本让它在光标靠近时浮出、离开又消失，用户的实测反馈是这反而更烦 ——
+    /// 选了"始终隐藏"却时不时冒出来，既不符合字面意思也打断视线。
+    /// </summary>
+    AlwaysHidden = 1,
 }
 
 /// <summary>标签关闭按钮的显示策略。</summary>
@@ -81,6 +90,28 @@ public sealed record AppearanceSettings
 
     /// <summary>禁用动画。除用户偏好外，系统「减少动态效果」开启时也应视为 true。</summary>
     public bool DisableAnimation { get; init; }
+
+    /// <summary>
+    /// 分组栏配色方案。
+    ///
+    /// 只提供几套预设而不是逐色可调：分组栏上只有背景、活动标签、文字这几种颜色，
+    /// 给每一种都配一个取色器，界面复杂度远超它带来的价值，
+    /// 而真正影响观感的其实只是"浅底还是深底"。
+    /// </summary>
+    public RailColorScheme ColorScheme { get; init; } = RailColorScheme.FollowSystem;
+}
+
+/// <summary>分组栏配色方案。</summary>
+public enum RailColorScheme
+{
+    /// <summary>跟随系统的浅色/深色设置。</summary>
+    FollowSystem = 0,
+
+    /// <summary>浅灰底、深色字。与深色 IDE、终端对比强烈，分组栏边界一眼可辨。</summary>
+    Light = 1,
+
+    /// <summary>深色底、浅色字。适合整体深色的桌面。</summary>
+    Dark = 2,
 }
 
 /// <summary>分组行为设置。</summary>
