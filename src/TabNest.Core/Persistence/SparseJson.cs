@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 
 namespace TabNest.Core.Persistence;
 
@@ -18,18 +19,93 @@ namespace TabNest.Core.Persistence;
 /// </summary>
 public static class SparseJson
 {
-    /// <summary>把 <paramref name="value"/> 相对 <paramref name="defaults"/> 的差异序列化为 JSON。</summary>
-    public static string Serialize<T>(T value, T defaults, JsonSerializerOptions options)
+    /// <summary>缩进选项。只影响写出格式，不参与类型解析，因此与裁剪无关。</summary>
+    private static readonly JsonSerializerOptions WriterOptions = new() { WriteIndented = true };
+
+    /// <summary>
+    /// 把 <paramref name="value"/> 相对 <paramref name="defaults"/> 的差异序列化为 JSON。
+    ///
+    /// 取的是 <see cref="JsonTypeInfo{T}"/> 而非 <see cref="JsonSerializerOptions"/>：
+    /// 后者会走反射解析，使整个应用无法裁剪（见 <see cref="TabNestJsonContext"/>）。
+    /// </summary>
+    public static string Serialize<T>(T value, T defaults, JsonTypeInfo<T> typeInfo)
     {
         ArgumentNullException.ThrowIfNull(value);
         ArgumentNullException.ThrowIfNull(defaults);
-        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(typeInfo);
 
-        var actual = JsonSerializer.SerializeToNode(value, options);
-        var baseline = JsonSerializer.SerializeToNode(defaults, options);
+        var actual = JsonSerializer.SerializeToNode(value, typeInfo);
+        var baseline = JsonSerializer.SerializeToNode(defaults, typeInfo);
 
         var diff = Diff(actual, baseline) ?? new JsonObject();
-        return diff.ToJsonString(options);
+        return diff.ToJsonString(WriterOptions);
+    }
+
+    /// <summary>
+    /// 读回稀疏 JSON：把差异合并回默认值，再整体反序列化。
+    ///
+    /// **不能直接 <c>JsonSerializer.Deserialize</c>。** 那依赖"JSON 里没有的属性保持
+    /// 属性初始化器的值"，而这个前提只在反射序列化下成立。源生成对 <c>init</c> 属性
+    /// 走参数化构造路径，生成的是：
+    ///
+    /// <code>
+    /// ObjectWithParameterizedConstructorCreator = args =>
+    ///     new AppSettings(){ Enabled = (bool)args[1], Grouping = (GroupingSettings)args[8], ... }
+    /// </code>
+    ///
+    /// 每个属性都从 args 强制赋值，JSON 里缺席的槽位是 CLR 默认值
+    /// （<c>false</c> / <c>0</c> / <c>null</c>），初始化器被直接覆盖。
+    /// 而稀疏写入省略的恰恰是等于默认值的字段 —— 两者相乘的结果是
+    /// <c>Enabled: true</c> 被省略、读回变 <c>false</c>，**TabNest 每次重启自我禁用**，
+    /// 且 <c>Grouping</c>/<c>Appearance</c> 变 null 导致一分组就空引用崩溃。
+    ///
+    /// 与其依赖序列化器的缺席语义，不如让读写对称：写的是"相对默认值的差异"，
+    /// 读就"把差异合并回默认值"。这样无论序列化器内部如何演进都成立。
+    /// </summary>
+    public static T Deserialize<T>(string json, T defaults, JsonTypeInfo<T> typeInfo)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        ArgumentNullException.ThrowIfNull(defaults);
+        ArgumentNullException.ThrowIfNull(typeInfo);
+
+        var stored = JsonNode.Parse(json);
+        var baseline = JsonSerializer.SerializeToNode(defaults, typeInfo);
+        var merged = Merge(baseline, stored);
+
+        return JsonSerializer.Deserialize(merged, typeInfo)
+            ?? throw new JsonException("合并默认值后反序列化得到 null。");
+    }
+
+    /// <summary>
+    /// 把 <paramref name="overlay"/> 覆盖到 <paramref name="baseline"/> 上。
+    /// 对象逐键递归，其余（数组与标量）整体覆盖 —— 与 <see cref="Diff"/> 的粒度一致。
+    /// </summary>
+    private static JsonNode? Merge(JsonNode? baseline, JsonNode? overlay)
+    {
+        if (overlay is null)
+        {
+            return baseline?.DeepClone();
+        }
+
+        if (overlay is JsonObject overlayObj && baseline is JsonObject baselineObj)
+        {
+            var result = new JsonObject();
+
+            foreach (var (key, value) in baselineObj)
+            {
+                result[key] = value?.DeepClone();
+            }
+
+            foreach (var (key, value) in overlayObj)
+            {
+                result[key] = Merge(baselineObj[key], value);
+            }
+
+            return result;
+        }
+
+        // 数组整体替换：写入侧也是整体写出的（"少了一条"与"没改过"必须可区分）。
+        return overlay.DeepClone();
     }
 
     /// <summary>

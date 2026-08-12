@@ -12,17 +12,33 @@
   </PropertyGroup>
 
   <!--
-    UseWPF 只是引入引用与 XAML 编译能力，不会让 WPF 程序集在启动时加载 ——
-    .NET 按需加载程序集，只要常驻代码路径不触碰 WPF 类型，PresentationFramework 就不进内存。
+    **不使用 WPF。** 设置中心与标签轨道一样走 GDI 自绘 + Win32 原生控件。
 
-    EnableDefaultApplicationDefinition=false 是这条约束的关键：
-    禁止 SDK 自动把 App.xaml 变成入口点，否则进程一启动就初始化 WPF Application，
-    常驻内存目标（≤60MB）直接作废。入口点是我们自己的 Program.Main。
+    原因是体积：WPF 官方不支持裁剪（启用 PublishTrimmed 时 SDK 直接报 NETSDK1168
+    拒绝构建），也不支持 NativeAOT。保留它只有两条路 —— 自包含 135MB，
+    或要求用户先装 55MB 的 .NET 桌面运行时；而摘掉后单文件压缩发布只有 11MB，
+    不到 Groupy 24.6MB 的一半，且零依赖双击即用。
+
+    代价被高估了：摘除时全项目 WPF 代码为零行（引用它的只有注释），
+    分组栏那 1443 行已经证明这套栈能画好，而且矢量绘制在高 DPI 下比
+    Groupy 的位图皮肤（Default.spak，6.6MB）更清晰。
+    真正要自己补的是布局、动画与控件，其中输入类控件改用 Win32 原生控件
+    （EDIT/COMBOBOX/BUTTON），可免费获得输入法、无障碍与键盘导航。
+
+    另外阶段二会把渲染器整体换成 C++，届时 WPF 只剩设置中心一个用户 ——
+    它从一开始就是个活不到终局的临时依赖。
   -->
   <PropertyGroup>
-    <UseWPF>true</UseWPF>
-    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
     <StartupObject>TabNest.App.Program</StartupObject>
+  </PropertyGroup>
+
+  <!--
+    裁剪与单文件发布。
+    发布产物实测：自包含不裁剪 101MB → 裁剪 20MB → 单文件压缩 11MB。
+    裁剪的硬性前提是 JSON 走源生成，见 TabNestJsonContext。
+  -->
+  <PropertyGroup Condition="'$(PublishTrimmed)' == 'true'">
+    <TrimMode>full</TrimMode>
   </PropertyGroup>
 
   <ItemGroup>
@@ -38,8 +54,4 @@
     需要拉伸，而不是因为 GDI 本身。矢量绘制加 ClearType 文本在任何 DPI 下都清晰。
     既然收益是边际的，就不值得多背一个原生互操作依赖。
   -->
-  <ItemGroup>
-    <PackageReference Include="WPF-UI" />
-  </ItemGroup>
-
 </Project>

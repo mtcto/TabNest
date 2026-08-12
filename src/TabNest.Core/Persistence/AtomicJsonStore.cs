@@ -1,5 +1,5 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace TabNest.Core.Persistence;
 
@@ -37,12 +37,11 @@ public enum LoadOutcome
 public sealed class AtomicJsonStore<T>
     where T : class
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
-        Converters = { new JsonStringEnumConverter() },
-    };
+    /// <summary>
+    /// 本类型的源生成元数据。泛型静态字段天然每个 <typeparamref name="T"/> 一份，
+    /// 因此解析只发生一次。
+    /// </summary>
+    private static readonly JsonTypeInfo<T> TypeInfo = ResolveTypeInfo();
 
     private readonly string _path;
     private readonly T _defaults;
@@ -56,6 +55,18 @@ public sealed class AtomicJsonStore<T>
         _defaults = defaults;
     }
 
+    /// <summary>
+    /// 从源生成上下文取出 <typeparamref name="T"/> 的元数据。
+    ///
+    /// 未登记就抛异常且指名道姓，而不是退回反射：静默退回会让裁剪重新失效，
+    /// 而那要等到发布时才会以"体积暴涨五倍"或"运行时找不到类型"的形式暴露。
+    /// </summary>
+    private static JsonTypeInfo<T> ResolveTypeInfo() =>
+        TabNestJsonContext.Default.GetTypeInfo(typeof(T)) as JsonTypeInfo<T>
+        ?? throw new InvalidOperationException(
+            $"类型 {typeof(T).FullName} 未在 {nameof(TabNestJsonContext)} 登记。"
+            + $"请在该类上补一行 [JsonSerializable(typeof({typeof(T).Name}))]。");
+
     public string Path => _path;
 
     public string BackupPath => _path + ".bak";
@@ -68,7 +79,7 @@ public sealed class AtomicJsonStore<T>
         if (!File.Exists(_path))
         {
             // 主文件不在但备份还在，说明上次写入正好崩在替换那一步。
-            if (File.Exists(BackupPath) && TryRead(BackupPath, out var fromBackup, out _))
+            if (File.Exists(BackupPath) && TryRead(BackupPath, _defaults, out var fromBackup, out _))
             {
                 return new LoadResult<T>(fromBackup!, LoadOutcome.RecoveredFromBackup);
             }
@@ -76,14 +87,14 @@ public sealed class AtomicJsonStore<T>
             return new LoadResult<T>(_defaults, LoadOutcome.NotFound);
         }
 
-        if (TryRead(_path, out var value, out var error))
+        if (TryRead(_path, _defaults, out var value, out var error))
         {
             return new LoadResult<T>(value!, LoadOutcome.Loaded);
         }
 
         QuarantineCorruptFile();
 
-        if (File.Exists(BackupPath) && TryRead(BackupPath, out var recovered, out _))
+        if (File.Exists(BackupPath) && TryRead(BackupPath, _defaults, out var recovered, out _))
         {
             return new LoadResult<T>(recovered!, LoadOutcome.RecoveredFromBackup, error);
         }
@@ -105,7 +116,7 @@ public sealed class AtomicJsonStore<T>
             Directory.CreateDirectory(directory);
         }
 
-        var json = SparseJson.Serialize(value, _defaults, SerializerOptions);
+        var json = SparseJson.Serialize(value, _defaults, TypeInfo);
         var temp = _path + ".tmp";
 
         // 先确保临时文件完整落盘，再做替换 —— 顺序反了就失去了原子性的意义。
@@ -121,7 +132,7 @@ public sealed class AtomicJsonStore<T>
         }
     }
 
-    private static bool TryRead(string path, out T? value, out string? error)
+    private static bool TryRead(string path, T defaults, out T? value, out string? error)
     {
         try
         {
@@ -135,7 +146,8 @@ public sealed class AtomicJsonStore<T>
                 return false;
             }
 
-            value = JsonSerializer.Deserialize<T>(json, SerializerOptions);
+            // 走合并读取而非直接反序列化：写入是稀疏的，读取必须对称地把差异合并回默认值。
+            value = SparseJson.Deserialize(json, defaults, TypeInfo);
             if (value is null)
             {
                 error = "反序列化结果为 null";

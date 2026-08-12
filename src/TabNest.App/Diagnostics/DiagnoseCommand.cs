@@ -154,47 +154,54 @@ internal static class DiagnoseCommand
 
     private static void WriteJson(SystemEnvironment environment, List<DiagnosticRow> rows)
     {
-        var payload = new
+        var windows = new List<WindowReport>(rows.Count);
+
+        foreach (var r in rows)
         {
-            version = BuildInfo.DisplayVersion,
-            environment = new
+            windows.Add(new WindowReport
             {
-                dwmEnabled = environment.IsDwmEnabled,
-                dragFullWindows = environment.IsDragFullWindowsEnabled,
-                integrityLevel = environment.OwnIntegrityLevel.ToString(),
-            },
-            windows = rows.Select(r => new
-            {
-                handle = r.Window.Identity.Handle.ToString("X", null),
-                processId = r.Window.Identity.ProcessId,
-                title = r.Window.Title,
-                processName = r.Window.ProcessName,
-                className = r.Window.ClassName,
-                bounds = new
+                Handle = r.Window.Identity.Handle.ToString("X", null),
+                ProcessId = r.Window.Identity.ProcessId,
+                Title = r.Window.Title,
+                ProcessName = r.Window.ProcessName,
+                ClassName = r.Window.ClassName,
+                Bounds = new BoundsReport
                 {
-                    r.Window.Bounds.Left,
-                    r.Window.Bounds.Top,
-                    r.Window.Bounds.Width,
-                    r.Window.Bounds.Height,
+                    Left = r.Window.Bounds.Left,
+                    Top = r.Window.Bounds.Top,
+                    Width = r.Window.Bounds.Width,
+                    Height = r.Window.Bounds.Height,
                 },
-                r.Window.Dpi,
-                monitor = r.Window.MonitorDeviceName,
-                r.Window.IsCloaked,
-                r.Window.IsToolWindow,
-                r.Window.HasOwner,
-                r.Window.IsNotResponding,
-                r.Window.IsUwp,
-                r.Window.HasCustomTitleBar,
-                integrityLevel = r.Window.IntegrityLevel.ToString(),
-                eligible = r.Result.IsEligible,
-                severity = r.Result.Severity.ToString(),
-                reason = r.Result.Reason.ToString(),
-                explanation = r.Result.Explanation,
-                suggestion = r.Result.Suggestion,
-            }),
+                Dpi = r.Window.Dpi,
+                Monitor = r.Window.MonitorDeviceName,
+                IsCloaked = r.Window.IsCloaked,
+                IsToolWindow = r.Window.IsToolWindow,
+                HasOwner = r.Window.HasOwner,
+                IsNotResponding = r.Window.IsNotResponding,
+                IsUwp = r.Window.IsUwp,
+                HasCustomTitleBar = r.Window.HasCustomTitleBar,
+                IntegrityLevel = r.Window.IntegrityLevel.ToString(),
+                Eligible = r.Result.IsEligible,
+                Severity = r.Result.Severity.ToString(),
+                Reason = r.Result.Reason.ToString(),
+                Explanation = r.Result.Explanation,
+                Suggestion = r.Result.Suggestion,
+            });
+        }
+
+        var payload = new DiagnosticReport
+        {
+            Version = BuildInfo.DisplayVersion,
+            Environment = new EnvironmentReport
+            {
+                DwmEnabled = environment.IsDwmEnabled,
+                DragFullWindows = environment.IsDragFullWindowsEnabled,
+                IntegrityLevel = environment.OwnIntegrityLevel.ToString(),
+            },
+            Windows = windows,
         };
 
-        Console.WriteLine(JsonSerializer.Serialize(payload, JsonOptions));
+        Console.WriteLine(JsonSerializer.Serialize(payload, DiagnosticJsonContext.Default.DiagnosticReport));
     }
 
     private static string DescribeFlags(WindowInfo window)

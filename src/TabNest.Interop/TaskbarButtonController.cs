@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using TabNest.Interop.Native;
 
 namespace TabNest.Interop;
 
@@ -16,6 +17,7 @@ namespace TabNest.Interop;
 internal sealed class TaskbarButtonController : IDisposable
 {
     private static readonly Guid ClsidTaskbarList = new("56FDF344-FD6D-11D0-958A-006097C9A090");
+    private static readonly Guid IidTaskbarList = new("56FDF342-FD6D-11D0-958A-006097C9A090");
 
     private ITaskbarList? _taskbar;
     private bool _initFailed;
@@ -89,16 +91,39 @@ internal sealed class TaskbarButtonController : IDisposable
 
         try
         {
-            var type = Type.GetTypeFromCLSID(ClsidTaskbarList, throwOnError: false);
-            if (type is null || Activator.CreateInstance(type) is not ITaskbarList instance)
+            // 走 CoCreateInstance 而非 Activator + GetTypeFromCLSID：
+            // 后者经由反射解析类型，裁剪器无法静态分析（IL2072），会让整个应用无法裁剪。
+            var hr = Ole32.CoCreateInstance(
+                in ClsidTaskbarList,
+                pUnkOuter: 0,
+                Ole32.CLSCTX_INPROC_SERVER,
+                in IidTaskbarList,
+                out var native);
+
+            if (hr < 0 || native == 0)
             {
                 _initFailed = true;
                 return null;
             }
 
-            instance.HrInit();
-            _taskbar = instance;
-            return _taskbar;
+            // 拿到原始接口指针后交给运行时包装。GetObjectForIUnknown 会自己 AddRef，
+            // 因此必须释放 CoCreateInstance 给我们的那一次引用，否则对象永不析构。
+            try
+            {
+                if (Marshal.GetObjectForIUnknown(native) is not ITaskbarList instance)
+                {
+                    _initFailed = true;
+                    return null;
+                }
+
+                instance.HrInit();
+                _taskbar = instance;
+                return _taskbar;
+            }
+            finally
+            {
+                Marshal.Release(native);
+            }
         }
         catch (Exception ex) when (ex is COMException or InvalidCastException or NotSupportedException)
         {

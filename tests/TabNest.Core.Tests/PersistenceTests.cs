@@ -24,6 +24,104 @@ public sealed class PersistenceTests : IDisposable
     }
 
     // ------------------------------------------------------------------
+    // 稀疏读回：差异必须合并回默认值
+    //
+    // 这组测试是补上来的。此前 147 个测试全绿，产品却一分组就空引用崩溃 ——
+    // 因为没有任何一个测试覆盖"磁盘上已存在一个稀疏文件，把它读回来"这条路径。
+    // 改用源生成序列化后，它对 init 属性走参数化构造，JSON 里缺席的属性会被
+    // CLR 默认值覆盖掉属性初始化器：Enabled 从 true 变 false（TabNest 自我禁用）、
+    // Grouping/Appearance 变 null（一用就崩）。
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 读回空稀疏文件得到完整的产品默认值()
+    {
+        var path = PathFor("empty.json");
+        File.WriteAllText(path, "{}");
+
+        var store = new AtomicJsonStore<AppSettings>(path, AppSettings.Default);
+        var loaded = store.Load();
+
+        Assert.Equal(LoadOutcome.Loaded, loaded.Outcome);
+
+        var s = loaded.Value;
+
+        // 产品默认为 true 的开关绝不能因为"没写进文件"就变成 false。
+        Assert.True(s.Enabled);
+        Assert.True(s.ShowHoverBar);
+        Assert.Equal(10, s.ClosedTabHistoryLimit);
+        Assert.Equal(1, s.SchemaVersion);
+
+        // 嵌套对象绝不能是 null —— 这正是产品崩溃的直接原因。
+        Assert.NotNull(s.Appearance);
+        Assert.NotNull(s.Grouping);
+        Assert.NotNull(s.Rules);
+
+        Assert.True(s.Grouping.YieldToNativeTabs);
+        Assert.True(s.Appearance.ShowWindowIcon);
+        Assert.Equal(TabVisibility.AlwaysVisible, s.Appearance.Visibility);
+    }
+
+    [Fact]
+    public void 稀疏往返后未改动的字段保持产品默认值()
+    {
+        var store = new AtomicJsonStore<AppSettings>(PathFor("s.json"), AppSettings.Default);
+
+        // 只改一个深层字段，其余全部走默认。
+        store.Save(AppSettings.Default with
+        {
+            Grouping = AppSettings.Default.Grouping with { SameApplicationOnly = true },
+        });
+
+        var s = store.Load().Value;
+
+        Assert.True(s.Grouping.SameApplicationOnly);
+
+        // 同一对象里没被改的兄弟字段必须保持产品默认值，而不是 CLR 默认值。
+        Assert.True(s.Grouping.YieldToNativeTabs);
+        Assert.Equal(DragDelay.Third, s.Grouping.Delay);
+        Assert.Equal(MiddleClickAction.CloseTab, s.Grouping.MiddleClick);
+
+        // 完全没碰过的其他分支同理。
+        Assert.True(s.Enabled);
+        Assert.NotNull(s.Appearance);
+        Assert.True(s.Appearance.RoundedTabs);
+    }
+
+    [Fact]
+    public void 读回时显式写入的假值不会被默认值覆盖()
+    {
+        var store = new AtomicJsonStore<AppSettings>(PathFor("s.json"), AppSettings.Default);
+
+        // Enabled 与 YieldToNativeTabs 产品默认都是 true，用户显式关掉了。
+        store.Save(AppSettings.Default with
+        {
+            Enabled = false,
+            Grouping = AppSettings.Default.Grouping with { YieldToNativeTabs = false },
+        });
+
+        var s = store.Load().Value;
+
+        // 合并方向必须是"存储覆盖默认"，反了就等于用户永远关不掉这些开关。
+        Assert.False(s.Enabled);
+        Assert.False(s.Grouping.YieldToNativeTabs);
+    }
+
+    [Fact]
+    public void 读回会话快照保持嵌套集合非空()
+    {
+        var path = PathFor("session.json");
+        File.WriteAllText(path, "{}");
+
+        var store = new AtomicJsonStore<SessionSnapshot>(path, SessionSnapshot.Empty);
+        var snapshot = store.Load().Value;
+
+        Assert.NotNull(snapshot.Groups);
+        Assert.Empty(snapshot.Groups);
+        Assert.False(snapshot.NeedsRecovery);
+    }
+
+    // ------------------------------------------------------------------
     // 稀疏写入
     // ------------------------------------------------------------------
 
