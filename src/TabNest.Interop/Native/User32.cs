@@ -38,6 +38,21 @@ internal static partial class User32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool IsHungAppWindow(nint hWnd);
 
+    // ---- 全局热键 ----
+    //
+    // 用 RegisterHotKey 而不是低级键盘钩子：后者让每一次按键都经过我们的进程，
+    // 处理稍慢就拖慢整个系统的输入，而且是杀软最敏感的行为之一。
+
+    public const uint WM_HOTKEY = 0x0312;
+
+    [LibraryImport(Lib, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool RegisterHotKey(nint hWnd, int id, uint fsModifiers, uint vk);
+
+    [LibraryImport(Lib, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool UnregisterHotKey(nint hWnd, int id);
+
     [LibraryImport(Lib, SetLastError = true)]
     public static partial nint SetCapture(nint hWnd);
 

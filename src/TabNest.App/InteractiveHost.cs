@@ -25,6 +25,9 @@ internal sealed class InteractiveHost : IDisposable
     /// <summary>批量收编各范围的菜单项从这个值开始编号。</summary>
     private const uint MenuAdoptBase = 100;
 
+    /// <summary>已保存分组的菜单项从这个值开始编号。</summary>
+    private const uint MenuWorkspaceBase = 200;
+
     private readonly UiDispatcher _dispatcher;
     private readonly Orchestrator _orchestrator;
     private readonly TrayIcon _tray;
@@ -37,6 +40,9 @@ internal sealed class InteractiveHost : IDisposable
 
     /// <summary>本次菜单弹出时可用的批量收编范围。菜单项是动态的，点击时按序号回查。</summary>
     private IReadOnlyList<(Core.Grouping.AdoptionScope Scope, string Text, int Count)> _adoptionScopes = [];
+
+    /// <summary>本次菜单弹出时列出的已保存分组。菜单项是动态的，点击时按序号回查。</summary>
+    private IReadOnlyList<Core.Persistence.SavedWorkspace> _workspaces = [];
 
     private bool _disposed;
 
@@ -103,6 +109,9 @@ internal sealed class InteractiveHost : IDisposable
             $"TabNest {BuildInfo.DisplayVersion} 已启动"
             + $"（PID {Environment.ProcessId}，数据目录 {AppPaths.Root}）。");
 
+        // 热键必须在 UI 线程上注册 —— WM_HOTKEY 投递到注册它的线程。
+        _orchestrator.InitializeHotkeys();
+
         UpdateTrayTooltip();
     }
 
@@ -125,6 +134,22 @@ internal sealed class InteractiveHost : IDisposable
         }
 
         if (items.Count > 0)
+        {
+            items.Add(TrayMenuItem.Separator);
+        }
+
+        // 已保存的分组：一键把那批应用重新组回去。
+        _workspaces = settings.Enabled ? _orchestrator.SavedWorkspacesList : [];
+
+        for (var i = 0; i < _workspaces.Count; i++)
+        {
+            var w = _workspaces[i];
+            items.Add(new TrayMenuItem(
+                MenuWorkspaceBase + (uint)i,
+                $"恢复分组「{w.Name}」（{w.Members.Count} 个窗口）"));
+        }
+
+        if (_workspaces.Count > 0)
         {
             items.Add(TrayMenuItem.Separator);
         }
@@ -168,6 +193,29 @@ internal sealed class InteractiveHost : IDisposable
 
     private void OnMenuItemClicked(uint id)
     {
+        // 已保存分组也是动态项，编号更高，必须先判。
+        if (id >= MenuWorkspaceBase)
+        {
+            var index = (int)(id - MenuWorkspaceBase);
+
+            if (index < _workspaces.Count)
+            {
+                var (restored, missing) = _orchestrator.RestoreWorkspace(_workspaces[index].Id);
+                UpdateTrayTooltip();
+
+                // 缺失的成员如实记录：保存的是五个窗口、恢复出三个却不吭声，
+                // 比直接说"两个应用没开着"更让人困惑。
+                if (missing.Count > 0)
+                {
+                    FileLog.Info(
+                        $"恢复分组：{restored} 个窗口已成组，"
+                        + $"以下成员未找到（应用可能没有运行）：{string.Join("、", missing)}");
+                }
+            }
+
+            return;
+        }
+
         // 批量收编项是动态生成的，按序号回查用户点的是哪个范围。
         if (id >= MenuAdoptBase)
         {
@@ -234,6 +282,13 @@ internal sealed class InteractiveHost : IDisposable
     {
         try
         {
+            // 已保存分组由宿主注入 —— 领域层不读磁盘。
+            Core.Layout.SettingsPages.SavedWorkspaceRows =
+            [
+                .. _orchestrator.SavedWorkspacesList.Select(w =>
+                    (w.Name, $"{w.Members.Count} 个窗口 · 保存于 {w.SavedAt.LocalDateTime:yyyy-MM-dd HH:mm}")),
+            ];
+
             if (_settingsWindow is null || !_settingsWindow.IsCreated)
             {
                 _settingsWindow = new Settings.SettingsWindow(

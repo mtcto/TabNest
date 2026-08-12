@@ -218,6 +218,121 @@ public sealed record ContentLayout
                         break;
                     }
 
+                case ListBlock list:
+                    {
+                        var blockTop = y;
+                        var pad = m.RowPadding;
+                        var innerWidth = Math.Max(1, width - (pad * 2));
+
+                        var listTitleHeight = canvas.MeasureTextHeight(
+                            list.Title, innerWidth, TextStyle.BodyStrong, dpi, wrap: false);
+
+                        var titleRect = new PixelRect(
+                            left + pad, y + pad, right - pad, y + pad + titleHeight);
+
+                        var rowTop = titleRect.Bottom + m.RowTextGap;
+                        var rows = new List<PixelRect>(Math.Max(1, list.Items.Count));
+
+                        if (list.Items.Count == 0)
+                        {
+                            var h = canvas.MeasureTextHeight(
+                                list.EmptyText, innerWidth, TextStyle.Caption, dpi);
+
+                            rows.Add(new PixelRect(left + pad, rowTop, right - pad, rowTop + h));
+                            rowTop += h;
+                        }
+                        else
+                        {
+                            foreach (var (primary, secondary) in list.Items)
+                            {
+                                var ph = canvas.MeasureTextHeight(
+                                    primary, innerWidth, TextStyle.Body, dpi, wrap: false);
+
+                                var sh = string.IsNullOrEmpty(secondary)
+                                    ? 0
+                                    : canvas.MeasureTextHeight(secondary, innerWidth, TextStyle.Caption, dpi);
+
+                                var total = ph + (sh > 0 ? m.RowTextGap + sh : 0);
+
+                                rows.Add(new PixelRect(left + pad, rowTop, right - pad, rowTop + total));
+                                rowTop += total + m.RowTextGap;
+                            }
+                        }
+
+                        var bottom = rowTop + pad;
+
+                        blocks.Add(new BlockLayout(
+                            block,
+                            new PixelRect(left, blockTop, right, bottom),
+                            titleRect,
+                            PixelRect.Empty,
+                            PixelRect.Empty,
+                            rows));
+
+                        y = bottom + m.RowGap;
+                        break;
+                    }
+
+                case SwatchBlock swatch:
+                    {
+                        var blockTop = y;
+                        var pad = m.RowPadding;
+                        var innerWidth = Math.Max(1, width - (pad * 2));
+
+                        var swatchTitleHeight = canvas.MeasureTextHeight(
+                            swatch.Title, innerWidth, TextStyle.BodyStrong, dpi, wrap: false);
+
+                        var titleRect = new PixelRect(
+                            left + pad, y + pad, right - pad, y + pad + titleHeight);
+
+                        var descRect = PixelRect.Empty;
+                        var cursor = titleRect.Bottom;
+
+                        if (!string.IsNullOrEmpty(swatch.Description))
+                        {
+                            cursor += m.RowTextGap;
+                            var dh = canvas.MeasureTextHeight(
+                                swatch.Description, innerWidth, TextStyle.Caption, dpi);
+
+                            descRect = new PixelRect(left + pad, cursor, right - pad, cursor + dh);
+                            cursor += dh;
+                        }
+
+                        cursor += m.SectionHeaderGap;
+
+                        // 色块横向排列，放不下就换行。
+                        var swatchSize = m.RowHeight;
+                        var rects = new List<PixelRect>(swatch.Swatches.Count);
+                        var x = left + pad;
+                        var rowY = cursor;
+
+                        foreach (var _ in swatch.Swatches)
+                        {
+                            if (x + swatchSize > right - pad && x > left + pad)
+                            {
+                                x = left + pad;
+                                rowY += swatchSize + m.CardGap + (m.RowHeight / 2);
+                            }
+
+                            rects.Add(PixelRect.FromSize(x, rowY, swatchSize, swatchSize));
+                            x += swatchSize + m.CardGap;
+                        }
+
+                        // 色块下方要留出写颜色名的位置。
+                        var bottom = rowY + swatchSize + (m.RowHeight / 2) + pad;
+
+                        blocks.Add(new BlockLayout(
+                            block,
+                            new PixelRect(left, blockTop, right, bottom),
+                            titleRect,
+                            descRect,
+                            PixelRect.Empty,
+                            rects));
+
+                        y = bottom + m.RowGap;
+                        break;
+                    }
+
                 case SeparatorBlock:
                     {
                         var blockTop = y;

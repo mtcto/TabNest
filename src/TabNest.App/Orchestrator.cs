@@ -1054,6 +1054,8 @@ internal sealed class Orchestrator : IDisposable
     private const uint MenuAdoptSameClass = 22;
     private const uint MenuAdoptSameMonitor = 23;
 
+    private const uint MenuSaveWorkspace = 30;
+
     private void OnRailInteraction(RailInteraction interaction)
     {
         var groupId = interaction.GroupId;
@@ -1220,6 +1222,7 @@ internal sealed class Orchestrator : IDisposable
             new(MenuCloseRight, "关闭右侧标签", Enabled: hasTab && !locked),
             new(MenuCloseAll, "关闭此组所有窗口", Enabled: !locked),
             PopupMenuItem.Separator,
+            new(MenuSaveWorkspace, "保存此分组（以后可一键恢复）"),
             new(MenuToggleLock, locked ? "解锁此分组" : "锁定此分组", Checked: locked),
             new(MenuDissolveGroup, "取消此分组"),
         ];
@@ -1257,6 +1260,12 @@ internal sealed class Orchestrator : IDisposable
                 AdoptInto(groupId, adoptionAnchor, scope);
             }
 
+            return;
+        }
+
+        if (command == MenuSaveWorkspace)
+        {
+            SaveWorkspace(groupId);
             return;
         }
 
@@ -1481,6 +1490,226 @@ internal sealed class Orchestrator : IDisposable
         }
 
         return result;
+    }
+
+    // ------------------------------------------------------------------
+    // 已保存分组
+    // ------------------------------------------------------------------
+
+    private AtomicJsonStore<SavedWorkspaceSet>? _workspaceStore;
+
+    private AtomicJsonStore<SavedWorkspaceSet> WorkspaceStore =>
+        _workspaceStore ??= new AtomicJsonStore<SavedWorkspaceSet>(
+            AppPaths.WorkspacesFile, SavedWorkspaceSet.Empty);
+
+    public IReadOnlyList<SavedWorkspace> SavedWorkspacesList => WorkspaceStore.Load().Value.Workspaces;
+
+    /// <summary>把一个活动分组存为已保存分组。</summary>
+    public bool SaveWorkspace(string groupId, string? name = null)
+    {
+        var group = _manager.FindGroup(groupId);
+
+        if (group is null || group.LiveTabCount == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            var set = WorkspaceStore.Load().Value;
+
+            var saved = SavedWorkspaces.Capture(
+                group,
+                name ?? group.Name ?? string.Empty,
+                $"w{DateTimeOffset.UtcNow.Ticks:X}",
+                DateTimeOffset.UtcNow);
+
+            WorkspaceStore.Save(set with { Workspaces = [.. set.Workspaces, saved] });
+
+            FileLog.Info($"已保存分组「{saved.Name}」，成员 {saved.Members.Count} 个。");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            FileLog.Error("保存分组失败。", ex);
+            return false;
+        }
+    }
+
+    public bool DeleteWorkspace(string workspaceId)
+    {
+        try
+        {
+            var set = WorkspaceStore.Load().Value;
+            var remaining = set.Workspaces.Where(w => w.Id != workspaceId).ToList();
+
+            if (remaining.Count == set.Workspaces.Count)
+            {
+                return false;
+            }
+
+            WorkspaceStore.Save(set with { Workspaces = remaining });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            FileLog.Error("删除已保存分组失败。", ex);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 恢复一个已保存分组：在当前打开的窗口里找回它的成员并重新成组。
+    /// </summary>
+    /// <returns>实际成组的窗口数，以及没找到的成员描述。</returns>
+    public (int Restored, IReadOnlyList<string> Missing) RestoreWorkspace(string workspaceId)
+    {
+        var workspace = WorkspaceStore.Load().Value.Workspaces
+            .FirstOrDefault(w => w.Id == workspaceId);
+
+        if (workspace is null)
+        {
+            return (0, ["找不到该已保存分组。"]);
+        }
+
+        var candidates = _enumerator.Enumerate().ToList();
+        var (matched, missing) = SavedWorkspaces.Resolve(workspace, candidates, _manager.IsGrouped);
+
+        // 如实报告找不到的成员，而不是假装恢复成功 ——
+        // 用户保存的是五个窗口，恢复出三个却不吭声，比直接说"两个没开着"更糟。
+        var missingText = missing
+            .Select(m => $"{m.ProcessName}（{m.Title}）")
+            .ToList();
+
+        if (matched.Count < 2)
+        {
+            FileLog.Info($"恢复分组「{workspace.Name}」：可用窗口不足两个。");
+            return (0, missingText);
+        }
+
+        var candidateTabs = new List<TabCandidate>(matched.Count);
+
+        foreach (var window in matched)
+        {
+            var snapshot = WindowController.CaptureSnapshot(window.Identity.Handle);
+
+            if (snapshot is not null)
+            {
+                candidateTabs.Add(new TabCandidate(window, snapshot));
+            }
+        }
+
+        if (candidateTabs.Count < 2)
+        {
+            return (0, missingText);
+        }
+
+        var bounds = workspace.Bounds.IsEmpty
+            ? ReserveRailSpace(matched[0])
+            : workspace.Bounds;
+
+        var result = _manager.CreateGroup(candidateTabs, bounds);
+
+        if (!result.Success || result.Group is null)
+        {
+            FileLog.Warn($"恢复分组失败：{result.Message}");
+            return (0, missingText);
+        }
+
+        FileLog.Info(
+            $"已恢复分组「{workspace.Name}」，成组 {candidateTabs.Count} 个"
+            + (missing.Count > 0 ? $"，{missing.Count} 个成员未找到" : string.Empty));
+
+        Apply(result, result.Group.Id);
+
+        return (candidateTabs.Count, missingText);
+    }
+
+    // ------------------------------------------------------------------
+    // 全局热键
+    // ------------------------------------------------------------------
+
+    private HotkeyRegistrar? _hotkeys;
+
+    /// <summary>注册全局热键。必须在 UI 线程上调用 —— 热键消息投递到注册它的线程。</summary>
+    public void InitializeHotkeys()
+    {
+        _hotkeys = new HotkeyRegistrar(_dispatcher.Handle);
+        _dispatcher.HotkeyPressed += OnHotkeyPressed;
+        _hotkeys.Apply(_settings.Hotkeys);
+    }
+
+    private void OnHotkeyPressed(int id)
+    {
+        if (_hotkeys?.Resolve(id) is not { } command)
+        {
+            return;
+        }
+
+        // 热键永远作用于**当前前台窗口所在的组**。
+        //
+        // 不用"最后活跃的组"这类记忆状态：用户按下 Win+` 时脑子里想的是
+        // 眼前这个窗口，而记忆状态在切走又切回后往往已经不是他以为的那个组。
+        var foreground = WindowEnumerator.ForegroundWindow();
+        var group = FindGroupByHandle(foreground);
+
+        switch (command)
+        {
+            case HotkeyCommand.NextTab:
+            case HotkeyCommand.PreviousTab:
+                if (group is not null)
+                {
+                    CycleTab(group, forward: command is HotkeyCommand.NextTab);
+                }
+
+                break;
+
+            case HotkeyCommand.DetachCurrent:
+                if (group is not null && FindTabByHandle(group, foreground) is { } tab)
+                {
+                    Apply(_manager.DetachTab(group.Id, tab.Identity), group.Id);
+                }
+
+                break;
+
+            case HotkeyCommand.DissolveCurrent:
+                if (group is not null)
+                {
+                    Apply(_manager.DissolveGroup(group.Id), group.Id);
+                }
+
+                break;
+
+            case HotkeyCommand.AdoptSameApp:
+                _ = AdoptForegroundWindows(AdoptionScope.SameApplication);
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    /// <summary>在组内循环切换标签。</summary>
+    private void CycleTab(GroupSession group, bool forward)
+    {
+        var live = group.LiveTabs.ToList();
+
+        if (live.Count < 2)
+        {
+            return;
+        }
+
+        var index = live.FindIndex(t => t.State is TabState.Active);
+
+        if (index < 0)
+        {
+            index = 0;
+        }
+
+        // 取模时先加长度：C# 的 % 对负数返回负值，直接用会算出越界下标。
+        var next = ((index + (forward ? 1 : -1)) % live.Count + live.Count) % live.Count;
+
+        Apply(_manager.ActivateTab(group.Id, live[next].Identity), group.Id);
     }
 
     /// <summary>把一批窗口收编进已有的组。</summary>
@@ -1812,6 +2041,13 @@ internal sealed class Orchestrator : IDisposable
             ApplyTaskbarPolicyToAllGroups();
         }
 
+        // 热键改动必须重新注册。不重注册的话用户改了绑定却发现旧组合还生效、
+        // 新组合没反应，而且无从判断是没保存还是功能坏了。
+        if (previous.Hotkeys != updated.Hotkeys)
+        {
+            _hotkeys?.Apply(updated.Hotkeys);
+        }
+
         // 外观改动只需重画分组栏。
         if (previous.Appearance != updated.Appearance)
         {
@@ -2031,6 +2267,11 @@ internal sealed class Orchestrator : IDisposable
 
         // 顺序：先停止观察（不再产生新事件）→ 还原窗口 → 释放控制队列。
         _shutdown.Cancel();
+
+        // 热键必须注销：留下的注册会一直占用那个组合，别的软件再也绑不上。
+        _dispatcher.HotkeyPressed -= OnHotkeyPressed;
+        _hotkeys?.Dispose();
+
         _observer.Dispose();
         _dropHint?.Dispose();
 

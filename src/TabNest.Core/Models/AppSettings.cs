@@ -139,6 +139,8 @@ public sealed record AppSettings
 
     public GroupingSettings Grouping { get; init; } = new();
 
+    public HotkeySettings Hotkeys { get; init; } = new();
+
     public IReadOnlyList<Rule> Rules { get; init; } = [];
 
     /// <summary>

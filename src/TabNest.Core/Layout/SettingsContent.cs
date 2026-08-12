@@ -31,6 +31,9 @@ public enum SettingId
     HideMenuButton,
     DisableAnimation,
 
+    // 分组规则
+    HotkeysEnabled,
+
     // 分组设置
     DragTrigger,
     DragDelay,
@@ -138,6 +141,34 @@ public sealed record InfoBlock : ContentBlock
 
 /// <summary>分隔线。</summary>
 public sealed record SeparatorBlock : ContentBlock;
+
+/// <summary>
+/// 只读的条目列表：规则、热键绑定、已保存分组都用它呈现。
+///
+/// 阶段一刻意做成只读展示 + 说明如何编辑，而不是做成可编辑控件。
+/// 可编辑的规则表需要文本框、下拉框、增删行与校验，是设置中心里最大的一块；
+/// 与其赶出一个半成品，不如先把现状如实呈现出来，并明确告诉用户在哪里改。
+/// </summary>
+public sealed record ListBlock : ContentBlock
+{
+    public required string Title { get; init; }
+
+    /// <summary>每一行：主文本 + 次要文本。</summary>
+    public required IReadOnlyList<(string Primary, string Secondary)> Items { get; init; }
+
+    /// <summary>列表为空时显示的话。必须写清"没有"和"怎么加"。</summary>
+    public required string EmptyText { get; init; }
+}
+
+/// <summary>一块颜色样本，用于颜色页展示当前配色。</summary>
+public sealed record SwatchBlock : ContentBlock
+{
+    public required string Title { get; init; }
+    public string? Description { get; init; }
+
+    /// <summary>颜色样本：名称 + ARGB。</summary>
+    public required IReadOnlyList<(string Name, uint Argb)> Swatches { get; init; }
+}
 
 /// <summary>一页的完整内容。</summary>
 public sealed record PageContent

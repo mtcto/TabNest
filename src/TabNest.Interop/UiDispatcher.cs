@@ -45,8 +45,22 @@ public sealed class UiDispatcher : Win32Window
     public void RequestShutdown() =>
         User32.PostThreadMessage(_nativeThreadId, User32.WM_QUIT, 0, 0);
 
+    /// <summary>
+    /// 收到全局热键。
+    /// 参数是热键 ID，由 <see cref="HotkeyRegistrar"/> 翻译成具体功能。
+    /// </summary>
+    public event Action<int>? HotkeyPressed;
+
     protected override nint? WndProc(uint msg, nint wParam, nint lParam)
     {
+        // 热键消息投递到注册它的线程，而注册发生在 UI 线程上，
+        // 因此这个消息专用窗口正是它的落点。
+        if (msg == User32.WM_HOTKEY)
+        {
+            HotkeyPressed?.Invoke((int)wParam);
+            return 0;
+        }
+
         if (msg != WindowClass.WM_TABNEST_SYNC)
         {
             return null;

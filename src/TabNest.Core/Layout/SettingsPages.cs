@@ -44,8 +44,8 @@ public static class SettingsPages
             SettingsPage.Overview => Overview(settings),
             SettingsPage.Appearance => Appearance(settings),
             SettingsPage.Grouping => Grouping(settings),
-            SettingsPage.Colors => Placeholder(page, "标签颜色", "主题色与标签配色。"),
-            SettingsPage.Rules => Placeholder(page, "分组规则", "自动分组、已保存分组、阻止与允许应用、自定义规则。"),
+            SettingsPage.Colors => Colors(settings),
+            SettingsPage.Rules => Rules(settings),
             _ => About(),
         };
     }
@@ -271,6 +271,180 @@ public static class SettingsPages
         ],
     };
 
+    /// <summary>已保存分组的摘要，由宿主注入 —— 领域层不读磁盘。</summary>
+    public static IReadOnlyList<(string Primary, string Secondary)> SavedWorkspaceRows { get; set; } = [];
+
+    private static PageContent Rules(AppSettings s)
+    {
+        var ruleRows = s.Rules
+            .Select(r => (
+                Primary: $"{r.Name}（{DescribeAction(r.Action)}）",
+                Secondary: DescribeConditions(r)))
+            .ToList();
+
+        var hotkeyRows = s.Hotkeys.Bindings
+            .Select(b => (
+                Primary: HotkeySettings.DescribeCommand(b.Command),
+                Secondary: b.Describe()))
+            .ToList();
+
+        var conflicts = s.Hotkeys.FindConflicts();
+
+        var blocks = new List<ContentBlock>
+        {
+            new SectionBlock
+            {
+                Title = "全局热键",
+                Description = "在任何应用里都能触发，用于在当前分组内快速切换。",
+            },
+            new ToggleBlock
+            {
+                Id = SettingId.HotkeysEnabled,
+                Title = "启用全局热键",
+                Description = "全局热键会占用整个系统的按键组合。与其他软件冲突时可在此一次性关掉。",
+                Value = s.Hotkeys.Enabled,
+            },
+            new ListBlock
+            {
+                Title = "当前绑定",
+                Items = hotkeyRows,
+                EmptyText = "没有任何绑定。",
+            },
+        };
+
+        if (conflicts.Count > 0)
+        {
+            // 冲突必须显式告知：Windows 只把组合交给先注册的那个，
+            // 后者静默失效，用户看到的是"这个热键没反应"却毫无线索。
+            blocks.Add(new InfoBlock
+            {
+                Text = "以下功能绑定了相同的组合，只有其中一个会生效：\n"
+                    + string.Join("\n", conflicts.Select(c =>
+                        $"· {HotkeySettings.DescribeCommand(c.A)} 与 {HotkeySettings.DescribeCommand(c.B)}")),
+                IsWarning = true,
+            });
+        }
+
+        blocks.AddRange(
+        [
+            new SectionBlock
+            {
+                Title = "已保存分组",
+                Description = "在分组栏菜单里选「保存此分组」即可加入这里，之后从托盘菜单一键恢复。",
+            },
+            new ListBlock
+            {
+                Title = "已保存",
+                Items = SavedWorkspaceRows,
+                EmptyText = "还没有保存过分组。在分组栏上点右键，选「保存此分组」。",
+            },
+
+            new SectionBlock
+            {
+                Title = "自定义规则",
+                Description = "按进程名、窗口类与标题的组合决定某个窗口能否分组。"
+                    + "优先级固定为：阻止 > 允许 > 自动分组。",
+            },
+            new ListBlock
+            {
+                Title = "当前规则",
+                Items = ruleRows,
+                EmptyText = "还没有任何规则。当前版本可在数据目录的 settings.json 中编辑 rules 数组，"
+                    + "图形化规则编辑器将在后续版本提供。",
+            },
+            new InfoBlock
+            {
+                Text = "阻止规则的优先级最高且不可调整。这是有意的：阻止表达的是"
+                    + "「我不要这个应用被碰」，属于安全边界。若允许规则能盖过它，"
+                    + "用户就无法可靠地把密码管理器、银行客户端这类应用排除在外。",
+            },
+        ]);
+
+        return new PageContent
+        {
+            Page = SettingsPage.Rules,
+            Title = "分组规则",
+            Subtitle = "热键、已保存分组与自定义匹配规则。",
+            Blocks = blocks,
+        };
+    }
+
+    private static string DescribeAction(TabNest.Core.Rules.RuleAction action) => action switch
+    {
+        TabNest.Core.Rules.RuleAction.Block => "阻止分组",
+        TabNest.Core.Rules.RuleAction.Allow => "允许分组",
+        _ => "自动分组",
+    };
+
+    private static string DescribeConditions(TabNest.Core.Rules.Rule rule)
+    {
+        if (rule.Conditions.Count == 0)
+        {
+            return "没有任何条件，该规则不会生效。";
+        }
+
+        var parts = rule.Conditions.Select(c =>
+        {
+            var fields = new List<string>(3);
+
+            if (!string.IsNullOrWhiteSpace(c.ProcessName))
+            {
+                fields.Add($"进程 {c.ProcessName}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(c.ClassName))
+            {
+                fields.Add($"窗口类 {c.ClassName}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(c.Title))
+            {
+                fields.Add($"标题{(c.PartialMatch ? "包含" : "等于")} {c.Title}");
+            }
+
+            return fields.Count == 0 ? "匹配任意窗口" : string.Join(" 且 ", fields);
+        });
+
+        return string.Join("；或 ", parts);
+    }
+
+    private static PageContent Colors(AppSettings s)
+    {
+        _ = s;
+
+        return new PageContent
+        {
+            Page = SettingsPage.Colors,
+            Title = "标签颜色",
+            Subtitle = "分组栏的配色跟随系统明暗主题。",
+            Blocks =
+            [
+                new SectionBlock
+                {
+                    Title = "当前配色",
+                    Description = "分组栏使用矢量绘制，没有位图皮肤，因此在任何缩放比例下都保持清晰。",
+                },
+                new SwatchBlock
+                {
+                    Title = "分组栏",
+                    Description = "跟随系统的浅色/深色设置自动切换。",
+                    Swatches =
+                    [
+                        ("背景", 0xFFE8E8E8),
+                        ("活动标签", 0xFFFFFFFF),
+                        ("活动文字", 0xFF1A1A1A),
+                        ("非活动文字", 0xFF606060),
+                    ],
+                },
+                new InfoBlock
+                {
+                    Text = "按分组、按应用自定义强调色的功能已在数据模型中就位"
+                        + "（每个分组与每个标签都可单独设色），图形化的取色界面将在后续版本提供。",
+                },
+            ],
+        };
+    }
+
     private static PageContent Placeholder(SettingsPage page, string title, string subtitle) => new()
     {
         Page = page,
@@ -313,6 +487,10 @@ public static class SettingsPages
         return id switch
         {
             SettingId.MasterEnabled => s with { Enabled = !s.Enabled },
+            SettingId.HotkeysEnabled => s with
+            {
+                Hotkeys = s.Hotkeys with { Enabled = !s.Hotkeys.Enabled },
+            },
             SettingId.ShowHoverBar => s with { ShowHoverBar = !s.ShowHoverBar },
             SettingId.RunAtStartup => s with { RunAtStartup = !s.RunAtStartup },
 

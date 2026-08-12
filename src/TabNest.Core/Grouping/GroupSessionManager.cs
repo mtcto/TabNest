@@ -555,6 +555,7 @@ public sealed class GroupSessionManager
         Identity = candidate.Window.Identity,
         Title = candidate.Window.Title,
         ProcessName = candidate.Window.ProcessName,
+        ClassName = candidate.Window.ClassName,
         ProcessPath = candidate.Window.ProcessPath,
         Snapshot = candidate.Snapshot,
         State = isActive ? TabState.Active : TabState.Inactive,

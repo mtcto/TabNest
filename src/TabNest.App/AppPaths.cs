@@ -16,6 +16,9 @@ internal static class AppPaths
     /// <summary>组快照。每次窗口写操作前落盘，崩溃后据此恢复。</summary>
     public static string SessionFile => Path.Combine(Root, "session.json");
 
+    /// <summary>已保存的分组。与会话快照分开：前者是用户资产，后者是崩溃恢复的临时数据。</summary>
+    public static string WorkspacesFile => Path.Combine(Root, "workspaces.json");
+
     public static string LogDirectory => Path.Combine(Root, "logs");
 
     public static void EnsureCreated()

@@ -155,6 +155,14 @@ internal static class SettingsRenderer
                     PaintInfo(c, s, b, info, view.Left, dy);
                     break;
 
+                case ListBlock list:
+                    PaintList(c, s, b, list, view.Left, dy);
+                    break;
+
+                case SwatchBlock swatch:
+                    PaintSwatches(c, s, b, swatch, view.Left, dy);
+                    break;
+
                 case SeparatorBlock:
                     c.DrawSeparator(
                         bounds.Left, bounds.Right,
@@ -310,6 +318,95 @@ internal static class SettingsRenderer
             info.Text, Offset(b.DescriptionBounds, ox, oy),
             info.IsWarning ? t.Warning : t.TextSecondary,
             TextStyle.Caption, s.Dpi, wrap: true);
+    }
+
+    private static void PaintList(
+        GdiCanvas c, SettingsRenderState s, BlockLayout b, ListBlock list, int ox, int oy)
+    {
+        var t = s.Theme;
+
+        c.FillRoundRect(Offset(b.Bounds, ox, oy), t.CardBackground, s.Metrics.CornerRadius);
+
+        c.DrawStyledText(
+            list.Title, Offset(b.TitleBounds, ox, oy),
+            t.Text, TextStyle.BodyStrong, s.Dpi);
+
+        if (list.Items.Count == 0)
+        {
+            if (b.Options.Count > 0)
+            {
+                c.DrawStyledText(
+                    list.EmptyText, Offset(b.Options[0], ox, oy),
+                    t.TextSecondary, TextStyle.Caption, s.Dpi, wrap: true);
+            }
+
+            return;
+        }
+
+        for (var i = 0; i < b.Options.Count && i < list.Items.Count; i++)
+        {
+            var row = Offset(b.Options[i], ox, oy);
+            var (primary, secondary) = list.Items[i];
+
+            var primaryHeight = c.MeasureTextHeight(
+                primary, row.Width, TextStyle.Body, s.Dpi, wrap: false);
+
+            c.DrawStyledText(
+                primary,
+                new PixelRect(row.Left, row.Top, row.Right, row.Top + primaryHeight),
+                t.Text, TextStyle.Body, s.Dpi);
+
+            if (!string.IsNullOrEmpty(secondary))
+            {
+                var secondTop = row.Top + primaryHeight + s.Metrics.RowTextGap;
+
+                if (secondTop < row.Bottom)
+                {
+                    c.DrawStyledText(
+                        secondary,
+                        new PixelRect(row.Left, secondTop, row.Right, row.Bottom),
+                        t.TextSecondary, TextStyle.Caption, s.Dpi, wrap: true);
+                }
+            }
+        }
+    }
+
+    private static void PaintSwatches(
+        GdiCanvas c, SettingsRenderState s, BlockLayout b, SwatchBlock swatch, int ox, int oy)
+    {
+        var t = s.Theme;
+
+        c.FillRoundRect(Offset(b.Bounds, ox, oy), t.CardBackground, s.Metrics.CornerRadius);
+
+        c.DrawStyledText(
+            swatch.Title, Offset(b.TitleBounds, ox, oy),
+            t.Text, TextStyle.BodyStrong, s.Dpi);
+
+        if (!b.DescriptionBounds.IsEmpty && swatch.Description is not null)
+        {
+            c.DrawStyledText(
+                swatch.Description, Offset(b.DescriptionBounds, ox, oy),
+                t.TextSecondary, TextStyle.Caption, s.Dpi, wrap: true);
+        }
+
+        for (var i = 0; i < b.Options.Count && i < swatch.Swatches.Count; i++)
+        {
+            var rect = Offset(b.Options[i], ox, oy);
+            var (name, argb) = swatch.Swatches[i];
+
+            c.FillRoundRect(rect, argb, s.Metrics.CornerRadius / 2);
+
+            // 描边是必需的：浅色样本在浅色卡片上、深色样本在深色卡片上
+            // 都会看不出边界，用户以为那里是空的。
+            c.DrawRoundRectOutline(rect, t.Border, s.Metrics.CornerRadius / 2);
+
+            c.DrawStyledText(
+                name,
+                new PixelRect(
+                    rect.Left - (s.Metrics.CardGap / 2), rect.Bottom,
+                    rect.Right + (s.Metrics.CardGap / 2), rect.Bottom + (s.Metrics.RowHeight / 2)),
+                t.TextSecondary, TextStyle.Caption, s.Dpi, TextAlign.Center);
+        }
     }
 
     // ------------------------------------------------------------------

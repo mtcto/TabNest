@@ -34,16 +34,26 @@ internal static class GroupTestCommand
             }
         }
 
-        if (windows.Count < 2)
+        // 明确挑「普通窗口」。
+        //
+        // 早期是直接取前两个 Harness 窗口，结果 Harness 上开着固定尺寸窗口时
+        // 本测试会误报"成员没有对齐到组矩形" —— 那个窗口够不到组矩形是它自己的
+        // 尺寸约束决定的，属正当行为。本测试要验证的是基准路径，
+        // 有脾气的窗口交给 --quirktest。
+        var normals = windows
+            .Where(w => w.Title.Contains("普通窗口", StringComparison.Ordinal))
+            .ToList();
+
+        if (normals.Count < 2)
         {
             Console.Error.WriteLine(
-                "需要至少两个 Harness 测试窗口。请先运行：\n"
+                "需要至少两个「普通窗口」类型的 Harness 测试窗口。请先运行：\n"
                 + "  TabNest.Harness.exe --spawn normal,normal");
             return 1;
         }
 
-        var target = windows[0];
-        var dragged = windows[1];
+        var target = normals[0];
+        var dragged = normals[1];
 
         Write($"拖放目标：{target.Title}  {target.Bounds}");
         Write($"被拖窗口：{dragged.Title}  {dragged.Bounds}");

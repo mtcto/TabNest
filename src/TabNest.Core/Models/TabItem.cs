@@ -35,6 +35,14 @@ public sealed record TabItem
 
     public required string ProcessName { get; init; }
 
+    /// <summary>
+    /// 窗口类名。
+    ///
+    /// 保存分组后要能重新找回这个窗口，而进程名太粗：同一个应用的主窗口、
+    /// 设置面板、工具窗都是同一个进程名，只按它匹配会把设置面板恢复成主窗口。
+    /// </summary>
+    public string ClassName { get; init; } = string.Empty;
+
     /// <summary>进程可执行文件路径。窗口关闭后"重开已关闭标签"需要它来重新启动应用。</summary>
     public string? ProcessPath { get; init; }
 

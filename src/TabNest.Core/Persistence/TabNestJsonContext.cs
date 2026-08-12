@@ -23,4 +23,5 @@ namespace TabNest.Core.Persistence;
 [JsonSourceGenerationOptions(WriteIndented = true, UseStringEnumConverter = true)]
 [JsonSerializable(typeof(AppSettings))]
 [JsonSerializable(typeof(SessionSnapshot))]
+[JsonSerializable(typeof(SavedWorkspaceSet))]
 internal sealed partial class TabNestJsonContext : JsonSerializerContext;
