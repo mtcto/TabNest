@@ -22,6 +22,9 @@ internal sealed class InteractiveHost : IDisposable
     private const uint MenuExit = 6;
     private const uint MenuSettings = 7;
 
+    /// <summary>批量收编各范围的菜单项从这个值开始编号。</summary>
+    private const uint MenuAdoptBase = 100;
+
     private readonly UiDispatcher _dispatcher;
     private readonly Orchestrator _orchestrator;
     private readonly TrayIcon _tray;
@@ -31,6 +34,9 @@ internal sealed class InteractiveHost : IDisposable
     /// 常驻内存里也不会有它的任何痕迹。
     /// </summary>
     private Settings.SettingsWindow? _settingsWindow;
+
+    /// <summary>本次菜单弹出时可用的批量收编范围。菜单项是动态的，点击时按序号回查。</summary>
+    private IReadOnlyList<(Core.Grouping.AdoptionScope Scope, string Text, int Count)> _adoptionScopes = [];
 
     private bool _disposed;
 
@@ -100,12 +106,30 @@ internal sealed class InteractiveHost : IDisposable
         UpdateTrayTooltip();
     }
 
-    private IReadOnlyList<TrayMenuItem> BuildMenu()
+    private List<TrayMenuItem> BuildMenu()
     {
         var settings = _orchestrator.Settings;
         var groups = _orchestrator.GroupCount;
 
-        return
+        // 批量收编以**当前前台窗口**为基准。托盘菜单弹出时前台窗口还没变，
+        // 因此这里取到的正是用户刚才在用的那个窗口。
+        _adoptionScopes = settings.Enabled
+            ? _orchestrator.DescribeForegroundAdoption()
+            : [];
+
+        var items = new List<TrayMenuItem>(16);
+
+        for (var i = 0; i < _adoptionScopes.Count; i++)
+        {
+            items.Add(new TrayMenuItem(MenuAdoptBase + (uint)i, _adoptionScopes[i].Text));
+        }
+
+        if (items.Count > 0)
+        {
+            items.Add(TrayMenuItem.Separator);
+        }
+
+        items.AddRange(
         [
             // 标签直接写出点击后的动作，而不是写状态名。
             // 早期写作"启用 TabNest"配一个勾选标记，用户在已启用时点它以为是"确认启用"，
@@ -137,11 +161,32 @@ internal sealed class InteractiveHost : IDisposable
             TrayMenuItem.Separator,
 
             new TrayMenuItem(MenuExit, "退出"),
-        ];
+        ]);
+
+        return items;
     }
 
     private void OnMenuItemClicked(uint id)
     {
+        // 批量收编项是动态生成的，按序号回查用户点的是哪个范围。
+        if (id >= MenuAdoptBase)
+        {
+            var index = (int)(id - MenuAdoptBase);
+
+            if (index < _adoptionScopes.Count)
+            {
+                var count = _orchestrator.AdoptForegroundWindows(_adoptionScopes[index].Scope);
+                UpdateTrayTooltip();
+
+                if (count == 0)
+                {
+                    FileLog.Info("批量收编没有产生分组。");
+                }
+            }
+
+            return;
+        }
+
         switch (id)
         {
             case MenuToggleEnabled:

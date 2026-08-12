@@ -23,7 +23,8 @@ internal static class TestData
         bool hasOwner = false,
         bool notResponding = false,
         bool isUwp = false,
-        int pid = 1000) => new()
+        int pid = 1000,
+        string monitor = @"\\.\DISPLAY1") => new()
         {
             Identity = Id(handle, pid),
             Title = title,
@@ -34,7 +35,7 @@ internal static class TestData
             ShowState = WindowShowState.Normal,
             IntegrityLevel = integrity,
             Dpi = 96,
-            MonitorDeviceName = @"\\.\DISPLAY1",
+            MonitorDeviceName = monitor,
             IsCloaked = cloaked,
             IsTopmost = false,
             IsToolWindow = toolWindow,

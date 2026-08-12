@@ -65,6 +65,8 @@ internal static class QuirkTestCommand
         failures += TestFixedSizeMember(orchestrator, normal, fixedSize);
         Console.WriteLine();
         failures += TestHideOnCloseMember(orchestrator, hiders[0], hiders[1]);
+        Console.WriteLine();
+        failures += TestBatchAdoption(orchestrator, windows);
 
         orchestrator.DissolveEverything();
         PumpMessages(TimeSpan.FromMilliseconds(500));
@@ -226,6 +228,102 @@ internal static class QuirkTestCommand
 
         return failures;
     }
+
+    /// <summary>
+    /// 批量收编：把同一应用的全部未分组窗口一次成组。
+    ///
+    /// 这条路径无法用鼠标测试 —— 它的入口是托盘菜单，而菜单项内容取决于
+    /// 当时的前台窗口。因此走编排层的公开入口断言结果。
+    /// </summary>
+    private static int TestBatchAdoption(Orchestrator orchestrator, List<WindowInfo> harnessWindows)
+    {
+        Console.WriteLine("── 批量收编 ──");
+
+        var failures = 0;
+
+        // Harness 的窗口同属一个进程，因此"同一应用"范围应当把它们全都选中。
+        var expected = harnessWindows.Count;
+        Console.WriteLine($"Harness 共有 {expected} 个窗口，同属一个进程");
+
+        // 让其中一个成为前台窗口，收编以它为基准。
+        var anchor = harnessWindows[0];
+        orchestrator.ActivateForTest(anchor.Identity.Handle);
+        PumpMessages(TimeSpan.FromMilliseconds(800));
+
+        var scopes = orchestrator.DescribeForegroundAdoption();
+
+        failures += Check(
+            "能列出可收编的范围",
+            scopes.Count > 0,
+            "前台窗口没有可收编的同类窗口，或前台窗口不可识别");
+
+        if (scopes.Count == 0)
+        {
+            return failures;
+        }
+
+        foreach (var (scope, text, _) in scopes)
+        {
+            Console.WriteLine($"  {scope}：{text}");
+        }
+
+        var adopted = orchestrator.AdoptForegroundWindows(scopes[0].Scope);
+        PumpMessages(TimeSpan.FromSeconds(2));
+
+        failures += Check(
+            "一次收编成组",
+            adopted >= 2,
+            $"只收编了 {adopted} 个窗口");
+
+        var group = orchestrator.GroupsForTest.FirstOrDefault();
+
+        failures += Check(
+            "组内成员数与菜单上报的数量一致",
+            group is not null && group.LiveTabCount == adopted,
+            $"菜单说会收编 {adopted} 个，实际组内 {group?.LiveTabCount} 个 —— "
+            + "菜单数量与实际结果不符会让用户无法预期这次操作的规模");
+
+        if (group is not null)
+        {
+            // 收编进来的窗口应当被对齐到组矩形，否则用户会看到分组栏建好了、
+            // 窗口却散落在各处。
+            //
+            // 但**有自身尺寸约束的窗口够不到组矩形是正当的**：系统会把它夹回
+            // 自己允许的尺寸，那是应用的决定而非我们的失败。判据因此是
+            // "左上角对齐"而不是"整个矩形相等" —— 位置我们说了算，尺寸未必。
+            var misplaced = group.LiveTabs
+                .Select(t => (t, Bounds: WindowEnumerator.ReadVisibleBounds(t.Identity.Handle)))
+                .Where(x => Math.Abs(x.Bounds.Left - group.Bounds.Left) > 8
+                    || Math.Abs(x.Bounds.Top - group.Bounds.Top) > 8)
+                .ToList();
+
+            failures += Check(
+                "收编的窗口都已移动到组的位置",
+                misplaced.Count == 0,
+                $"{misplaced.Count} 个成员位置不对："
+                + string.Join("、", misplaced.Select(x => $"{x.t.Title} 在 {x.Bounds}")));
+
+            var clamped = group.LiveTabs.Count(t =>
+                !Near(WindowEnumerator.ReadVisibleBounds(t.Identity.Handle), group.Bounds, 8));
+
+            if (clamped > 0)
+            {
+                Console.WriteLine(
+                    $"       （{clamped} 个成员的尺寸被其自身约束夹住，属正常）");
+            }
+        }
+
+        orchestrator.DissolveEverything();
+        PumpMessages(TimeSpan.FromMilliseconds(600));
+
+        return failures;
+    }
+
+    private static bool Near(Core.Models.PixelRect a, Core.Models.PixelRect b, int tolerance) =>
+        Math.Abs(a.Left - b.Left) <= tolerance
+        && Math.Abs(a.Top - b.Top) <= tolerance
+        && Math.Abs(a.Right - b.Right) <= tolerance
+        && Math.Abs(a.Bottom - b.Bottom) <= tolerance;
 
     private static int Check(string name, bool ok, string? detail)
     {

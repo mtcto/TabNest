@@ -954,6 +954,11 @@ internal sealed class Orchestrator : IDisposable
     /// <summary>测试入口：模拟某个成员上报了位置变化。</summary>
     internal void NotifyLocationForTest(nint hwnd) => OnLocationChanged(hwnd);
 
+    /// <summary>测试入口：把指定窗口切到前台，供依赖前台判定的路径测试。</summary>
+    internal void ActivateForTest(nint hwnd) =>
+        _controller.ExecuteAsync(new ActivateWindowAction(
+            new WindowIdentity(hwnd, 0, 0))).GetAwaiter().GetResult();
+
     /// <summary>把 <paramref name="draggedHandle"/> 合并到 <paramref name="targetHandle"/> 所在的组。</summary>
     private void TryMerge(nint draggedHandle, nint targetHandle)
     {
@@ -1041,6 +1046,13 @@ internal sealed class Orchestrator : IDisposable
     private const uint MenuCloseAll = 6;
     private const uint MenuToggleLock = 7;
     private const uint MenuDissolveGroup = 8;
+
+    // 批量收编。计划书 §4.6 列为 P0：把某应用的十几个窗口逐个拖进组，
+    // 比一次点击慢一个数量级，而这正是重度用户最常见的诉求。
+    private const uint MenuAdoptSameApp = 20;
+    private const uint MenuAdoptSameAppMonitor = 21;
+    private const uint MenuAdoptSameClass = 22;
+    private const uint MenuAdoptSameMonitor = 23;
 
     private void OnRailInteraction(RailInteraction interaction)
     {
@@ -1212,6 +1224,24 @@ internal sealed class Orchestrator : IDisposable
             new(MenuDissolveGroup, "取消此分组"),
         ];
 
+        // 批量收编：把还没分组的同类窗口一次性并进来。
+        // 数量为 1 表示只有基准窗口自己，没有可收编的对象，此时不显示该项 ——
+        // 显示一个点了等于没点的菜单项比不显示更糟。
+        var adoptionAnchor = group.ActiveTab is { } activeTab
+            ? _enumerator.Describe(activeTab.Identity.Handle)
+            : null;
+
+        if (adoptionAnchor is not null && !locked)
+        {
+            var adoptItems = BuildAdoptionItems(adoptionAnchor);
+
+            if (adoptItems.Count > 0)
+            {
+                items.Add(PopupMenuItem.Separator);
+                items.AddRange(adoptItems);
+            }
+        }
+
         var command = PopupMenuBuilder.Show(rail.Handle, interaction.ScreenPoint, items);
         if (command == 0)
         {
@@ -1219,6 +1249,16 @@ internal sealed class Orchestrator : IDisposable
         }
 
         var groupId = interaction.GroupId;
+
+        if (ScopeOf(command) is { } scope)
+        {
+            if (adoptionAnchor is not null)
+            {
+                AdoptInto(groupId, adoptionAnchor, scope);
+            }
+
+            return;
+        }
 
         var result = command switch
         {
@@ -1235,6 +1275,259 @@ internal sealed class Orchestrator : IDisposable
 
         if (result is not null)
         {
+            Apply(result, groupId);
+        }
+
+        if (command is MenuCloseTab or MenuCloseOthers or MenuCloseLeft
+            or MenuCloseRight or MenuCloseAll)
+        {
+            ScheduleSweep(groupId);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 批量收编
+    // ------------------------------------------------------------------
+
+    private static AdoptionScope? ScopeOf(uint command) => command switch
+    {
+        MenuAdoptSameApp => AdoptionScope.SameApplication,
+        MenuAdoptSameAppMonitor => AdoptionScope.SameApplicationOnMonitor,
+        MenuAdoptSameClass => AdoptionScope.SameWindowClass,
+        MenuAdoptSameMonitor => AdoptionScope.SameMonitor,
+        _ => null,
+    };
+
+    /// <summary>
+    /// 生成批量收编菜单项。
+    ///
+    /// 每一项都带上**实际会被收编的窗口数**，用户点之前就知道会发生什么 ——
+    /// 一次把七个窗口拽进组是个不小的动作，不该让人点了才知道规模。
+    /// 数量为 1 的范围（只剩基准窗口自己）直接不显示：点了等于没点。
+    /// </summary>
+    private List<PopupMenuItem> BuildAdoptionItems(WindowInfo anchor)
+    {
+        var candidates = _enumerator.Enumerate().ToList();
+        var items = new List<PopupMenuItem>(4);
+
+        var scopes = new (AdoptionScope Scope, uint Command)[]
+        {
+            (AdoptionScope.SameApplication, MenuAdoptSameApp),
+            (AdoptionScope.SameApplicationOnMonitor, MenuAdoptSameAppMonitor),
+            (AdoptionScope.SameWindowClass, MenuAdoptSameClass),
+            (AdoptionScope.SameMonitor, MenuAdoptSameMonitor),
+        };
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var (scope, command) in scopes)
+        {
+            var plan = PlanAdoption(anchor, candidates, scope);
+
+            if (plan.Windows.Count < 2)
+            {
+                continue;
+            }
+
+            var text = BatchAdoption.DescribeScope(scope, anchor, plan.Windows.Count);
+
+            // 单显示器、单一窗口类的常见情形下，几个范围会选出完全相同的一批窗口。
+            // 列出四条文字不同、效果一样的菜单项只会让人犹豫该选哪个。
+            var signature = string.Join(
+                ",", plan.Windows.Select(w => w.Identity.Handle.ToString("X", null)).Order());
+
+            if (!seen.Add(signature))
+            {
+                continue;
+            }
+
+            items.Add(new PopupMenuItem(command, text));
+        }
+
+        return items;
+    }
+
+    private AdoptionPlan PlanAdoption(
+        WindowInfo anchor, IReadOnlyList<WindowInfo> candidates, AdoptionScope scope)
+    {
+        var context = BuildEligibilityContext();
+
+        return BatchAdoption.Plan(
+            anchor,
+            candidates,
+            scope,
+            _manager.IsGrouped,
+            window =>
+            {
+                var eligibility = EligibilityEvaluator.Evaluate(window, context);
+                return eligibility.IsEligible ? null : eligibility.Explanation;
+            });
+    }
+
+    /// <summary>
+    /// 以当前前台窗口为基准，把同类的未分组窗口一次性收成一个新组。
+    ///
+    /// 这是"从零开始"的入口 —— 用户手上还没有任何分组时，
+    /// 只有分组栏上的菜单是不够的，因为那时根本没有分组栏。
+    /// 供托盘菜单调用。
+    /// </summary>
+    public int AdoptForegroundWindows(AdoptionScope scope)
+    {
+        if (!_settings.Enabled)
+        {
+            FileLog.Info("批量收编：TabNest 已停用。");
+            return 0;
+        }
+
+        var foreground = WindowEnumerator.ForegroundWindow();
+        var anchor = _enumerator.Describe(foreground);
+
+        if (anchor is null)
+        {
+            FileLog.Info("批量收编：当前前台窗口不可识别。");
+            return 0;
+        }
+
+        // 前台窗口已经在组里的话，收编到那个组，而不是另起一个。
+        if (_manager.FindGroupByWindow(anchor.Identity) is { } existing)
+        {
+            AdoptInto(existing.Id, anchor, scope);
+            return existing.LiveTabCount;
+        }
+
+        var plan = PlanAdoption(anchor, _enumerator.Enumerate().ToList(), scope);
+
+        if (plan.Windows.Count < 2)
+        {
+            FileLog.Info($"批量收编：没有可与「{anchor.Title}」成组的窗口。");
+            return 0;
+        }
+
+        var candidates = new List<TabCandidate>(plan.Windows.Count);
+
+        foreach (var window in plan.Windows)
+        {
+            var snapshot = WindowController.CaptureSnapshot(window.Identity.Handle);
+
+            if (snapshot is null)
+            {
+                FileLog.Warn($"批量收编：跳过「{window.Title}」，无法捕获快照。");
+                continue;
+            }
+
+            candidates.Add(new TabCandidate(window, snapshot));
+        }
+
+        if (candidates.Count < 2)
+        {
+            return 0;
+        }
+
+        var result = _manager.CreateGroup(candidates, ReserveRailSpace(anchor));
+
+        if (!result.Success || result.Group is null)
+        {
+            FileLog.Warn($"批量收编失败：{result.Message}");
+            return 0;
+        }
+
+        FileLog.Info($"批量收编：新建组 {result.Group.Id}，成员 {candidates.Count} 个。");
+        Apply(result, result.Group.Id);
+
+        return candidates.Count;
+    }
+
+    /// <summary>供托盘菜单查询各范围下能收编多少窗口，以便把数量写进菜单文案。</summary>
+    public IReadOnlyList<(AdoptionScope Scope, string Text, int Count)> DescribeForegroundAdoption()
+    {
+        var anchor = _enumerator.Describe(WindowEnumerator.ForegroundWindow());
+
+        if (anchor is null)
+        {
+            return [];
+        }
+
+        var candidates = _enumerator.Enumerate().ToList();
+        var result = new List<(AdoptionScope, string, int)>(4);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var scope in (AdoptionScope[])
+                 [
+                     AdoptionScope.SameApplication,
+                     AdoptionScope.SameApplicationOnMonitor,
+                     AdoptionScope.SameWindowClass,
+                     AdoptionScope.SameMonitor,
+                 ])
+        {
+            var plan = PlanAdoption(anchor, candidates, scope);
+
+            if (plan.Windows.Count < 2)
+            {
+                continue;
+            }
+
+            // 各范围选出同一批窗口时只保留一条：列出四条效果相同、
+            // 文字不同的菜单项只会让人犹豫该选哪个。
+            var signature = string.Join(
+                ",", plan.Windows.Select(w => w.Identity.Handle.ToString("X", null)).Order());
+
+            if (!seen.Add(signature))
+            {
+                continue;
+            }
+
+            result.Add((scope, BatchAdoption.DescribeScope(scope, anchor, plan.Windows.Count),
+                plan.Windows.Count));
+        }
+
+        return result;
+    }
+
+    /// <summary>把一批窗口收编进已有的组。</summary>
+    private void AdoptInto(string groupId, WindowInfo anchor, AdoptionScope scope)
+    {
+        var plan = PlanAdoption(anchor, _enumerator.Enumerate().ToList(), scope);
+
+        // 基准窗口已经在组里了，收编的是它之外的那些。
+        var newcomers = plan.Windows
+            .Where(w => w.Identity != anchor.Identity)
+            .ToList();
+
+        if (newcomers.Count == 0)
+        {
+            FileLog.Info("批量收编：没有可收编的窗口。");
+            return;
+        }
+
+        FileLog.Info(
+            $"批量收编 {newcomers.Count} 个窗口进组 {groupId}"
+            + (plan.Skipped.Count > 0 ? $"，跳过 {plan.Skipped.Count} 个" : string.Empty));
+
+        foreach (var (window, reason) in plan.Skipped)
+        {
+            FileLog.Info($"  跳过「{window.Title}」：{reason}");
+        }
+
+        foreach (var window in newcomers)
+        {
+            var snapshot = WindowController.CaptureSnapshot(window.Identity.Handle);
+
+            if (snapshot is null)
+            {
+                // 拿不到快照就绝不接管：没有快照就没有还原依据，
+                // 一旦分组，这个窗口的原始位置与状态就永久丢失了。
+                FileLog.Warn($"  收编「{window.Title}」失败：无法捕获窗口快照。");
+                continue;
+            }
+
+            var result = _manager.AddTab(groupId, new TabCandidate(window, snapshot));
+
+            if (!result.Success)
+            {
+                FileLog.Warn($"  收编「{window.Title}」失败：{result.Message}");
+                continue;
+            }
+
             Apply(result, groupId);
         }
     }
