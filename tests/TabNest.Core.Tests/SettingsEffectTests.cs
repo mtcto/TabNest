@@ -156,15 +156,71 @@ public sealed class SettingsEffectTests
     }
 
     [Fact]
-    public void 始终隐藏就是始终隐藏不因任何条件浮出()
+    public void 自动隐藏时光标靠近顶部才浮出()
     {
-        // 用户实测反馈：选了「始终隐藏」却因鼠标靠近而冒出来，
-        // 既不符合字面意思也打断视线。现在它只有一种行为。
+        // 与自动隐藏的任务栏同一种心智：平时不占空间，需要时抬一下鼠标就出来。
         Assert.False(RailAppearance.ShouldShowRail(
-            TabVisibility.AlwaysHidden, liveTabCount: 2, hideWhenSingleTab: false));
+            TabVisibility.AlwaysHidden, liveTabCount: 2, hideWhenSingleTab: false,
+            isPointerNearTop: false));
 
+        Assert.True(RailAppearance.ShouldShowRail(
+            TabVisibility.AlwaysHidden, liveTabCount: 2, hideWhenSingleTab: false,
+            isPointerNearTop: true));
+    }
+
+    [Fact]
+    public void 始终可见时光标位置无关紧要()
+    {
+        Assert.True(RailAppearance.ShouldShowRail(
+            TabVisibility.AlwaysVisible, liveTabCount: 2, hideWhenSingleTab: false,
+            isPointerNearTop: false));
+    }
+
+    [Fact]
+    public void 单标签隐藏优先于光标浮出()
+    {
+        // 光标靠近也不该把一个只有单标签的分组栏唤出来 —— 它不承载任何信息。
         Assert.False(RailAppearance.ShouldShowRail(
-            TabVisibility.AlwaysHidden, liveTabCount: 5, hideWhenSingleTab: false));
+            TabVisibility.AlwaysHidden, liveTabCount: 1, hideWhenSingleTab: true,
+            isPointerNearTop: true));
+    }
+
+    // ------------------------------------------------------------------
+    // 标签形状必须真的能看出区别
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 标签之间有间距且上下内缩()
+    {
+        // 早期标签紧挨着且占满分组栏高度，圆角全被相邻标签与分组栏边缘盖住，
+        // 「传统 / 圆形」这个设置于是完全看不出区别。
+        var layout = LayoutWith(Defaults);
+        var m = RailAppearance.MetricsFor(Defaults);
+
+        Assert.True(m.TabSpacing >= 4, "标签间距太小，相邻标签会糊成一块");
+        Assert.True(m.TabVerticalInset > 0, "标签占满整条高度时圆角会被压平");
+
+        // 标签顶边不贴分组栏顶边，底边不贴底边。
+        Assert.True(layout.Tabs[0].Bounds.Top > layout.Bounds.Top - layout.Bounds.Top);
+        Assert.True(layout.Tabs[0].Bounds.Height < m.Height);
+
+        // 相邻标签之间确实有空隙。
+        Assert.True(
+            layout.Tabs[1].Bounds.Left - layout.Tabs[0].Bounds.Right >= m.TabSpacing - 1,
+            "相邻标签之间没有留出间距");
+    }
+
+    [Fact]
+    public void 图标与关闭按钮跟随内缩后的标签垂直居中()
+    {
+        var layout = LayoutWith(Defaults);
+        var tab = layout.Tabs[0];
+
+        // 内缩之后若仍按分组栏整高居中，图标会偏出标签形状之外。
+        Assert.True(tab.IconBounds.Top >= tab.Bounds.Top);
+        Assert.True(tab.IconBounds.Bottom <= tab.Bounds.Bottom);
+        Assert.True(tab.CloseBounds.Top >= tab.Bounds.Top);
+        Assert.True(tab.CloseBounds.Bottom <= tab.Bounds.Bottom);
     }
 
     [Fact]

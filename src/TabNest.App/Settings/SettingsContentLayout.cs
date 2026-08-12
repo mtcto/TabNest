@@ -166,7 +166,33 @@ public sealed record ContentLayout
 
                         var x = left;
                         var rowTop = y;
-                        var rowHeight = m.CardHeight;
+
+                        // 卡片高度按**内容**算，不能写死。
+                        //
+                        // 早期用固定的 CardHeight，说明文字一长就被卡片底边截掉半句 ——
+                        // 而这些说明恰恰是在解释"选了它会怎样"，截断等于把最需要读的话吃掉。
+                        // 取所有选项里最高的那个，让同一组卡片等高，避免参差不齐。
+                        var pad = m.RowPadding;
+                        var innerWidth = Math.Max(1, m.CardWidth - (pad * 2));
+                        var maxTextHeight = 0;
+
+                        foreach (var option in choice.Options)
+                        {
+                            var titleH = canvas.MeasureTextHeight(
+                                option.Title, innerWidth, TextStyle.BodyStrong, dpi, wrap: false);
+
+                            // 禁用时显示的是"为什么不可用"，通常比正常说明更长。
+                            var caption = option.DisabledReason ?? option.Description;
+
+                            var captionH = string.IsNullOrEmpty(caption)
+                                ? 0
+                                : canvas.MeasureTextHeight(caption, innerWidth, TextStyle.Caption, dpi);
+
+                            maxTextHeight = Math.Max(maxTextHeight, titleH + captionH + m.RowTextGap);
+                        }
+
+                        var rowHeight = pad + m.CardIllustrationHeight + (pad / 2)
+                            + maxTextHeight + pad;
 
                         foreach (var _ in choice.Options)
                         {
@@ -178,7 +204,7 @@ public sealed record ContentLayout
                                 rowTop += rowHeight + m.CardGap;
                             }
 
-                            rects.Add(PixelRect.FromSize(x, rowTop, m.CardWidth, m.CardHeight));
+                            rects.Add(PixelRect.FromSize(x, rowTop, m.CardWidth, rowHeight));
                             x += m.CardWidth + m.CardGap;
                         }
 

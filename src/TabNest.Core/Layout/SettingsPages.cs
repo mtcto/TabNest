@@ -173,9 +173,9 @@ public static class SettingsPages
                         Illustration.RailAbove),
                     new ChoiceOption(
                         (int)TabVisibility.AlwaysHidden,
-                        "始终隐藏",
-                        "完全不显示分组栏，也不会因鼠标靠近而浮出。"
-                        + "分组关系照常生效：切换、整组移动、快捷键都能用，只是不占屏幕空间。",
+                        "自动隐藏",
+                        "平时不显示，鼠标移到窗口顶部时浮出，移开后重新隐藏。"
+                        + "与自动隐藏的任务栏是同一种心智，既省空间又随时可用。",
                         Illustration.TaskbarSingle),
                 ],
             },

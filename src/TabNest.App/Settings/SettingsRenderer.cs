@@ -298,17 +298,18 @@ internal static class SettingsRenderer
 
             if (!string.IsNullOrEmpty(caption))
             {
-                var capTop = textTop + titleHeight + 2;
-                var capBottom = card.Bottom - (pad / 2);
+                var capTop = textTop + titleHeight + s.Metrics.RowTextGap;
 
-                if (capBottom > capTop)
-                {
-                    c.DrawStyledText(
-                        caption,
-                        new PixelRect(card.Left + pad, capTop, card.Right - pad, capBottom),
-                        disabled ? t.Warning : t.TextSecondary,
-                        TextStyle.Caption, s.Dpi, wrap: true);
-                }
+                // 高度按实际测量给足，而不是"剩下多少画多少"。
+                // 卡片高度已由布局按内容算过，这里再夹一次只会把说明又截回去。
+                var capHeight = c.MeasureTextHeight(
+                    caption, card.Width - (pad * 2), TextStyle.Caption, s.Dpi);
+
+                c.DrawStyledText(
+                    caption,
+                    new PixelRect(card.Left + pad, capTop, card.Right - pad, capTop + capHeight),
+                    disabled ? t.Warning : t.TextSecondary,
+                    TextStyle.Caption, s.Dpi, wrap: true);
             }
         }
     }
@@ -337,6 +338,12 @@ internal static class SettingsRenderer
             list.Title, Offset(b.TitleBounds, ox, oy),
             t.Text, TextStyle.BodyStrong, s.Dpi);
 
+        // 列表为空时仍占一行（显示空提示），因此行数是 1 而不是 0。
+        // 按钮矩形接在行矩形之后，索引必须用这个行数而非 Items.Count ——
+        // 早期用了 Items.Count，列表为空时按钮索引算成 0，
+        // 正好和空提示行撞在一起，于是「新建规则」按钮根本没被画出来。
+        var rowCount = list.Items.Count == 0 ? 1 : list.Items.Count;
+
         if (list.Items.Count == 0)
         {
             if (b.Options.Count > 0)
@@ -346,6 +353,7 @@ internal static class SettingsRenderer
                     t.TextSecondary, TextStyle.Caption, s.Dpi, wrap: true);
             }
 
+            PaintListButtons(c, s, b, list, rowCount, ox, oy);
             return;
         }
 
@@ -383,10 +391,18 @@ internal static class SettingsRenderer
             }
         }
 
-        // 操作按钮。
+        PaintListButtons(c, s, b, list, rowCount, ox, oy);
+    }
+
+    private static void PaintListButtons(
+        GdiCanvas c, SettingsRenderState s, BlockLayout b, ListBlock list,
+        int rowCount, int ox, int oy)
+    {
+        var t = s.Theme;
+
         for (var i = 0; i < list.Buttons.Count; i++)
         {
-            var index = list.Items.Count + i;
+            var index = rowCount + i;
 
             if (index >= b.Options.Count)
             {

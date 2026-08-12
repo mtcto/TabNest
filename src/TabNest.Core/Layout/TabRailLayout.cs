@@ -8,7 +8,24 @@ public sealed record RailMetrics
     public int Height { get; init; } = 34;
     public int MinTabWidth { get; init; } = 96;
     public int MaxTabWidth { get; init; } = 240;
-    public int TabSpacing { get; init; } = 2;
+
+    /// <summary>
+    /// 标签之间的水平间距。
+    ///
+    /// 早期是 2 像素，相邻标签几乎贴在一起，加上非活动标签同色，
+    /// 整条分组栏看起来是一整块 —— 圆角全被相邻标签盖住，
+    /// 「标签样式：传统 / 圆形」这个设置于是完全看不出区别。
+    /// </summary>
+    public int TabSpacing { get; init; } = 4;
+
+    /// <summary>
+    /// 标签相对分组栏的上下内缩。
+    ///
+    /// 标签若占满整个分组栏高度，上下两组圆角分别贴着分组栏的上下边缘，
+    /// 视觉上被"压平"，圆角与直角依旧难分。内缩之后每个标签是一个独立的形状，
+    /// 圆角一眼可辨。
+    /// </summary>
+    public int TabVerticalInset { get; init; } = 3;
     public int SidePadding { get; init; } = 6;
     public int IconSize { get; init; } = 16;
     public int CloseButtonSize { get; init; } = 16;
@@ -46,6 +63,7 @@ public sealed record RailMetrics
             MinTabWidth = S(MinTabWidth),
             MaxTabWidth = S(MaxTabWidth),
             TabSpacing = S(TabSpacing),
+            TabVerticalInset = S(TabVerticalInset),
             SidePadding = S(SidePadding),
             IconSize = S(IconSize),
             CloseButtonSize = S(CloseButtonSize),
@@ -99,10 +117,12 @@ public static class RailAppearance
     /// <param name="visibility">用户选择的策略。</param>
     /// <param name="liveTabCount">组内存活标签数。</param>
     /// <param name="hideWhenSingleTab">只有一个标签时是否隐藏。</param>
+    /// <param name="isPointerNearTop">光标是否停在窗口顶部的浮出区域内。</param>
     public static bool ShouldShowRail(
         TabVisibility visibility,
         int liveTabCount,
-        bool hideWhenSingleTab)
+        bool hideWhenSingleTab,
+        bool isPointerNearTop = false)
     {
         // 单标签隐藏优先于一切策略：一个标签的标签栏不承载任何信息。
         if (hideWhenSingleTab && liveTabCount <= 1)
@@ -115,10 +135,10 @@ public static class RailAppearance
             return false;
         }
 
-        // 「始终隐藏」就是**始终**隐藏，不因光标靠近而浮出。
-        // 早期让它悬停浮出，用户实测反馈是选了始终隐藏却时不时冒出来，
-        // 既不符合字面意思也打断视线。
-        return visibility is TabVisibility.AlwaysVisible;
+        // 隐藏模式下光标移到窗口顶部要能把分组栏唤出来，
+        // 否则选了隐藏之后就再也切不了标签，只能靠快捷键。
+        // 与自动隐藏的任务栏同一种心智。
+        return visibility is TabVisibility.AlwaysVisible || isPointerNearTop;
     }
 }
 
@@ -315,11 +335,14 @@ public static class TabRailLayoutEngine
                 break;
             }
 
-            var bounds = PixelRect.FromSize(x, 0, tabWidth, metrics.Height);
+            // 上下内缩，让每个标签是分组栏里一个独立的形状而不是贴满整条的色块。
+            var inset = Math.Min(metrics.TabVerticalInset, metrics.Height / 4);
+            var bounds = PixelRect.FromSize(
+                x, inset, tabWidth, Math.Max(1, metrics.Height - (inset * 2)));
 
             // 图标尺寸为 0 表示用户关掉了"显示窗口图标"。此时不能只是不画，
             // 还必须把它占的位置一并收回，否则标题会莫名其妙地缩进一块。
-            var iconTop = (metrics.Height - metrics.IconSize) / 2;
+            var iconTop = bounds.Top + ((bounds.Height - metrics.IconSize) / 2);
             var iconBounds = metrics.IconSize > 0
                 ? PixelRect.FromSize(
                     bounds.Left + metrics.SidePadding, iconTop, metrics.IconSize, metrics.IconSize)
@@ -332,7 +355,7 @@ public static class TabRailLayoutEngine
             // 编排层压根没传悬停标签进来 —— 于是该策略永远匹配不到，关闭按钮从不出现。
             //
             // 把"在哪儿"与"显不显示"分开之后，悬停变化只需重绘，不必重新布局。
-            var closeTop = (metrics.Height - metrics.CloseButtonSize) / 2;
+            var closeTop = bounds.Top + ((bounds.Height - metrics.CloseButtonSize) / 2);
             var closeBounds = showCloseOn is CloseButtonPolicy.Never
                 ? PixelRect.Empty
                 : PixelRect.FromSize(
@@ -348,7 +371,7 @@ public static class TabRailLayoutEngine
                 : bounds.Left + metrics.SidePadding;
             var textRight = bounds.Right - metrics.SidePadding - metrics.CloseButtonSize;
             var textBounds = textRight > textLeft
-                ? new PixelRect(textLeft, 0, textRight, metrics.Height)
+                ? new PixelRect(textLeft, bounds.Top, textRight, bounds.Bottom)
                 : PixelRect.Empty;
 
             layouts.Add(new TabLayout(tab.Identity, bounds, iconBounds, closeBounds, textBounds));

@@ -2069,7 +2069,12 @@ internal sealed class Orchestrator : IDisposable
         var shouldShow = RailAppearance.ShouldShowRail(
             appearance.Visibility,
             group.LiveTabCount,
-            appearance.HideWhenSingleTab);
+            appearance.HideWhenSingleTab,
+            isPointerNearTop: IsPointerNearRail(anchor, metrics.Height));
+
+        // 隐藏模式需要持续探测光标位置：分组栏藏起来之后没有任何窗口能收到鼠标事件，
+        // 只能主动查。探测器只在**确实有隐藏模式的组**时才运行。
+        UpdateHoverProbe(appearance.Visibility is TabVisibility.AlwaysHidden);
 
         if (!shouldShow)
         {
@@ -2116,6 +2121,98 @@ internal sealed class Orchestrator : IDisposable
             FileLog.Warn(
                 $"分组栏刷新耗时 {railStart.ElapsedMilliseconds}ms"
                 + $"（组 {group.Id}，{group.LiveTabCount} 个标签）");
+        }
+    }
+
+    /// <summary>
+    /// 光标是否停在分组栏应当浮出的区域。
+    ///
+    /// 判定范围比分组栏本身高一些：分组栏隐藏时它并不占位，
+    /// 只按分组栏自身高度判定的话，用户得把光标精确停在一条看不见的窄带上才能唤出它。
+    /// 已显示时则要给一个更宽的滞回区，否则光标在边缘轻微抖动就会让它闪烁。
+    /// </summary>
+    private static bool IsPointerNearRail(PixelRect anchor, int railHeight)
+    {
+        if (!User32Cursor.TryGet(out var cursor))
+        {
+            return false;
+        }
+
+        var band = Math.Max(railHeight, 8);
+
+        return cursor.X >= anchor.Left
+            && cursor.X < anchor.Right
+            && cursor.Y >= anchor.Top - (band * 2)
+            && cursor.Y < anchor.Top + band;
+    }
+
+    /// <summary>
+    /// 隐藏模式下的光标探测器。
+    ///
+    /// **这是全产品唯一的轮询**，因此格外克制：只在确实有「始终隐藏」的分组时启动，
+    /// 没有就立刻停掉。分组栏藏起来之后没有任何窗口能收到鼠标事件，
+    /// 想知道"光标是不是靠近了"只能主动查 —— 没有别的办法。
+    ///
+    /// 120ms 一次，即每秒 8 次。低于这个频率浮出会有明显延迟，高于它则纯属浪费：
+    /// 人把手移到窗口顶部再停住，本身就要一两百毫秒。
+    /// </summary>
+    private void UpdateHoverProbe(bool needed)
+    {
+        if (needed == _hoverProbeRunning)
+        {
+            return;
+        }
+
+        _hoverProbeRunning = needed;
+
+        if (!needed)
+        {
+            _hoverProbeCancel?.Cancel();
+            _hoverProbeCancel?.Dispose();
+            _hoverProbeCancel = null;
+            return;
+        }
+
+        _hoverProbeCancel = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+        var token = _hoverProbeCancel.Token;
+
+        _ = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    while (!token.IsCancellationRequested)
+                    {
+                        await Task.Delay(120, token).ConfigureAwait(false);
+
+                        if (!_disposed)
+                        {
+                            _dispatcher.Post(RefreshHiddenRails);
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // 正常停止。
+                }
+            },
+            token);
+    }
+
+    private bool _hoverProbeRunning;
+    private CancellationTokenSource? _hoverProbeCancel;
+
+    /// <summary>只刷新使用隐藏模式的组，避免探测器把所有分组栏都重画一遍。</summary>
+    private void RefreshHiddenRails()
+    {
+        if (_disposed || _settings.Appearance.Visibility is not TabVisibility.AlwaysHidden)
+        {
+            return;
+        }
+
+        foreach (var group in _manager.Groups.ToList())
+        {
+            RefreshRail(group);
         }
     }
 
@@ -2483,6 +2580,10 @@ internal sealed class Orchestrator : IDisposable
 
         // 顺序：先停止观察（不再产生新事件）→ 还原窗口 → 释放控制队列。
         _shutdown.Cancel();
+
+        _hoverProbeCancel?.Cancel();
+        _hoverProbeCancel?.Dispose();
+        _iconCache.Dispose();
 
         // 热键必须注销：留下的注册会一直占用那个组合，别的软件再也绑不上。
         _dispatcher.HotkeyPressed -= OnHotkeyPressed;
