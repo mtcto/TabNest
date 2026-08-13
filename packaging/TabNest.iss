@@ -31,13 +31,15 @@ WizardStyle=modern
 SetupIconFile=..\src\TabNest.App\TabNest.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 
+; 未签名说明。官方发布不签名，用户需自行决定是否继续。
+InfoBeforeFile=unsigned-notice.txt
+
 ; 不要求管理员权限。
 ;
 ; TabNest 只操作当前用户会话里的窗口，装到用户目录即可，这样也避免了
 ; 提权后与普通权限应用之间的完整性级别不匹配 —— 高完整性进程无法操作
 ; 低完整性窗口，反过来也一样，装成管理员反而会让部分应用无法分组。
 PrivilegesRequired=lowest
-DefaultDirName={autopf}\{#AppName}
 
 ; 单文件发布产物只支持 x64/ARM64。
 ArchitecturesAllowed=x64compatible arm64

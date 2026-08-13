@@ -1,0 +1,26 @@
+TabNest 0.1.0 is not Authenticode-signed.
+
+Windows SmartScreen may show "Windows protected your PC".
+Click More info, confirm the file name, then Run anyway.
+
+Antivirus products may quarantine an unsigned window manager.
+Restore it only if you obtained this installer from the official
+TabNest GitHub repository.
+
+A signed official binary is not provided.
+If you need a signed build, purchase an OV code-signing certificate
+yourself and sign TabNest.exe plus this setup package.
+
+------------------------------------------------
+
+TabNest 0.1.0 未做代码签名。
+
+SmartScreen 可能提示「Windows 已保护你的电脑」。
+请点「更多信息」，确认文件名后选择「仍要运行」。
+
+杀毒软件可能隔离未签名的窗口管理工具。
+请确认安装包来自 TabNest 官方 GitHub 仓库后再恢复。
+
+官方不提供已签名的二进制。
+若你需要签名版，请自行购买 OV 代码签名证书，
+再分别签署 TabNest.exe 与本安装包。

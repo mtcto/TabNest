@@ -34,7 +34,7 @@ TabNest groups unrelated Windows applications into a single tabbed workspace. Dr
 
 It manages **windows**, not application internals. It never reads, modifies, or transmits the content of any document, and never loads code into another process.
 
-> **Status — 0.1.0, Phase 1 complete.** Grouping, switching, drag-merge/split, rules, saved workspaces, hotkeys, taskbar policies and the settings centre all work. Tabs drawn *inside* the native title bar require the Phase 2 injection layer and are not implemented yet. The binary is not code-signed, so SmartScreen will warn on first run.
+> **Status — 0.1.0, Phase 1 complete.** Grouping, switching, drag-merge/split, rules, saved workspaces, hotkeys, taskbar policies and the settings centre all work. Tabs drawn *inside* the native title bar require the Phase 2 injection layer and are not implemented yet. **This release is unsigned** — see [Unsigned builds](#unsigned-builds).
 
 ## Why
 
@@ -111,11 +111,24 @@ The tradeoff is honest and it is not free: staying outside means TabNest cannot 
 
 ## Install
 
-Download `TabNest.exe` from [Releases](../../releases) and run it. That is the whole procedure — it is a single self-contained executable that needs no runtime and no administrator rights.
+From [Releases](../../releases) download either:
 
-An optional installer adds a Start-menu entry, a launch-at-login option, and clean uninstall. Settings and saved groups live in `%LOCALAPPDATA%\TabNest\` and survive uninstall.
+- `TabNest.exe` — copy it anywhere and double-click. No runtime, no administrator rights.
+- `TabNest-0.1.0-setup.exe` — optional installer: Start-menu shortcut, launch-at-login, and a clean uninstall that asks the running instance to restore windows first.
 
-Because the binary is not yet code-signed, SmartScreen will show *"Windows protected your PC"* on first run — choose **More info → Run anyway**. Code signing is planned; see [Roadmap](#roadmap).
+Settings and saved groups live in `%LOCALAPPDATA%\TabNest\` and survive uninstall.
+
+### Unsigned builds
+
+**0.1.0 is not Authenticode-signed.** The publisher has not purchased an OV/EV code-signing certificate. That is a deliberate choice for this release, not a missing file in the zip.
+
+What you may see, and what to do:
+
+1. **SmartScreen — "Windows protected your PC".** This is the usual warning for a new, unsigned download. Click **More info**, confirm the file name is `TabNest.exe` or `TabNest-0.1.0-setup.exe`, then **Run anyway**. The prompt is per file hash: it can appear once for the installer and again for the installed `TabNest.exe`.
+2. **Antivirus quarantine or a "trojan" alert.** Unsigned window-management tools are a common false-positive class. Restore the file from quarantine if you trust the GitHub source. If your environment forbids unsigned binaries, do not run this build.
+3. **Corporate machines that block unsigned executables.** There is nothing to click through. You need a signed build, or an IT exception.
+
+**A signed official binary is not provided.** If you need one (SmartScreen-quiet distribution, enterprise allow-lists), buy an **OV** code-signing certificate yourself from a public CA (DigiCert, Sectigo, …), then sign `TabNest.exe` and the setup package with `signtool` and a timestamp server. An **EV** certificate is no longer required just to silence SmartScreen. Open-source maintainers can also apply to [SignPath Foundation](https://signpath.org/) for sponsored signing. How to hook a certificate into this repo is documented in [`packaging/README.md`](packaging/README.md).
 
 ### Requirements
 

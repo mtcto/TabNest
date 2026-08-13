@@ -30,22 +30,24 @@ iscc packaging/TabNest.iss
 配置与已保存分组（`%LOCALAPPDATA%\TabNest\`）在卸载时**保留**，它们是用户资产，重装后应当还在。
 只有日志会被清理。
 
-## 代码签名（尚未落实，需采购证书）
+## 代码签名（官方发布未签名，需自行购证）
 
-当前发布未签名，会有两个后果：
+0.1.0 及当前打包流程**默认不签名**。用户侧的 SmartScreen / 杀软提示，以及处理方式，写在仓库根目录 README 的「未签名版本」一节。
 
-1. **SmartScreen 拦截**。用户首次运行时看到"Windows 已保护你的电脑"，
-   需要点「更多信息 → 仍要运行」。新证书即使签了也要累积声誉才能免除这一步。
-2. **杀软误报风险**。阶段一尚可，但**阶段二引入 DLL 注入后，未签名基本等于被判死刑**——
-   全局注入是杀软最敏感的行为之一。
+官方不代购、不代签。需要签名版的人自己买 **OV** 代码签名证书（DigiCert、Sectigo 等）。2024 年起 EV 不再能让 SmartScreen 首次放行，仅为过拦截不必买 EV。
 
-签名需要 OV 或 EV 代码签名证书（OV 约 ¥1500-3000/年；EV 更贵但能立即绕过 SmartScreen）。
-证书采购需要由项目所有者完成，无法在开发阶段代办。
+拿到证书后：
 
-拿到证书后，在 `[Setup]` 段加：
+1. 先签发布产物：
 
 ```
-SignTool=signtool sign /f "证书路径.pfx" /p "密码" /tr http://timestamp.digicert.com /td sha256 /fd sha256 $f
+signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f "证书.pfx" /p "密码" publish\v1\TabNest.exe
 ```
 
-并对 `publish/v1/TabNest.exe` 单独签名后再打包——安装包和被安装的程序都要签。
+2. 再在 `TabNest.iss` 的 `[Setup]` 段加：
+
+```
+SignTool=signtool sign /f "证书.pfx" /p "密码" /tr http://timestamp.digicert.com /td sha256 /fd sha256 $f
+```
+
+安装包和被安装的 `TabNest.exe` 都要签。开源项目也可以向 [SignPath Foundation](https://signpath.org/) 申请由其证书代签，那种方式签出来的发布者名称是 SignPath Foundation，不是你自己。
