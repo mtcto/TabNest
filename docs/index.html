@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TabNest — 给每一个 Windows 窗口加上浏览器式标签</title>
+  <meta name="description" content="把互不相干的 Windows 应用窗口收成标签组。不注入任何进程。11MB 单文件，无需运行时。">
+  <link rel="icon" href="./assets/logo.png" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./tokens.css">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="./">
+        <img src="./assets/logo.png" width="28" height="28" alt="">
+        TabNest
+      </a>
+      <nav class="nav-links">
+        <a href="#why">特点</a>
+        <a href="#compare">对照</a>
+        <a href="#download">下载</a>
+        <a href="https://github.com/mtcto/TabNest">GitHub</a>
+        <a class="btn btn-cta" href="https://github.com/mtcto/TabNest/releases/download/v0.1.1/TabNest-0.1.1-setup.exe">下载 0.1.1</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="wrap">
+        <p class="eyebrow"><span class="dot" aria-hidden="true"></span> 0.1.1 · 阶段一 · 零 DLL 注入</p>
+        <h1>给每一个 Windows 窗口加上浏览器式标签</h1>
+        <p class="lede">
+          把 IDE、终端、浏览器、资源管理器收进同一个标签组。拖上去合并，拖出来拆分。
+          TabNest 只管理<strong>窗口</strong>，不进任何进程，也不碰你的文件。
+        </p>
+        <div class="btn-row">
+          <a class="btn btn-cta" href="https://github.com/mtcto/TabNest/releases/download/v0.1.1/TabNest-0.1.1-setup.exe">安装包</a>
+          <a class="btn btn-ghost" href="https://github.com/mtcto/TabNest/releases/download/v0.1.1/TabNest.exe">单文件 exe</a>
+        </div>
+
+        <figure class="rail-card" aria-label="分组栏示意">
+          <div class="rail">
+            <div class="tab active"><span class="tab-ico" style="background:#3b82f6"></span> VS Code</div>
+            <div class="tab"><span class="tab-ico" style="background:#22c55e"></span> 终端</div>
+            <div class="tab"><span class="tab-ico" style="background:#f97316"></span> Chrome</div>
+            <div class="tab"><span class="tab-ico" style="background:#a78bfa"></span> 资源管理器</div>
+          </div>
+          <div class="win">
+            <h2>当前活动窗口</h2>
+            <p>分组栏贴在窗口上方。<kbd>Win</kbd> + <kbd>`</kbd> 切到下一个标签。</p>
+          </div>
+        </figure>
+      </div>
+    </section>
+
+    <section id="why">
+      <div class="wrap">
+        <p class="section-kicker">为什么是这样</p>
+        <h2 class="section-title">同类工具几乎都靠注入。我们故意不这么做。</h2>
+        <p class="section-copy">
+          注入能把标签画进真正的标题栏，代价是进到浏览器和密码管理器的进程里。
+          TabNest 待在外面：观察走 WinEvent，操作走普通窗口 API。
+        </p>
+        <div class="grid">
+          <article class="card">
+            <h3>零 DLL 注入</h3>
+            <p>不向任何进程装载代码。崩溃半径止于自己；杀软与沙箱也少一层敏感行为。</p>
+          </article>
+          <article class="card">
+            <h3>11.3 MB，双击即用</h3>
+            <p>裁剪后的自包含单文件。不装 .NET，不装 VC++，不要管理员权限。</p>
+          </article>
+          <article class="card">
+            <h3>窗口随时可还原</h3>
+            <p>每次改窗口位置之前先落盘快照。崩溃、强杀、卸载，窗口和任务栏按钮都会回去。</p>
+          </article>
+          <article class="card">
+            <h3>空闲接近于零</h3>
+            <p>20 秒采样 CPU 0.000%，工作集约 35 MB。没有轮询，每一次唤醒都对应真实窗口事件。</p>
+          </article>
+          <article class="card">
+            <h3>开关必须真的有效</h3>
+            <p>设置里的每一项都有测试断言「改了之后行为不同」。点了没反应比没有这个开关更糟。</p>
+          </article>
+          <article class="card">
+            <h3>普通用户权限</h3>
+            <p>清单是 asInvoker。提权反而会因为完整性级别对不上，让一部分窗口分不了组。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="compare">
+      <div class="wrap">
+        <p class="section-kicker">对照 Groupy 2</p>
+        <h2 class="section-title">数字来自同一台机器的实测，不是估算。</h2>
+        <p class="section-copy">
+          标本是 Groupy 2 v2.3.1 与 TabNest 0.1.0，Windows 11 26100 x64。
+          你的数字会不同。集成标题栏仍是阶段二，今天做不到。
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th></th>
+                <th>TabNest</th>
+                <th>Groupy 2</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><th>许可</th><td>MIT，开源</td><td>商业，闭源</td></tr>
+              <tr><th>向其他进程注入</th><td>无</td><td>测试机 46 个进程</td></tr>
+              <tr><th>常驻工作集</th><td>35.2 MB</td><td>78 MB</td></tr>
+              <tr><th>空闲 CPU</th><td>0.000%</td><td>单核 0.08%</td></tr>
+              <tr><th>下载体积</th><td>11.3 MB 单文件</td><td>24.6 MB 安装包</td></tr>
+              <tr><th>标签画进原生标题栏</th><td>阶段二</td><td>有</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="download">
+      <div class="wrap">
+        <p class="section-kicker">安装</p>
+        <h2 class="section-title">Windows 10 2004+ / Windows 11，x64。</h2>
+        <p class="section-copy">
+          安装包提供开始菜单和开机自启。也可以只下 exe，放到任意目录双击。
+          配置在 <code style="font-family:var(--font-mono);font-size:13px;color:var(--fg)">%LOCALAPPDATA%\TabNest\</code>，卸载时保留。
+        </p>
+        <div class="btn-row" style="margin-bottom:32px">
+          <a class="btn btn-cta" href="https://github.com/mtcto/TabNest/releases/download/v0.1.1/TabNest-0.1.1-setup.exe">TabNest-0.1.1-setup.exe</a>
+          <a class="btn btn-ghost" href="https://github.com/mtcto/TabNest/releases/download/v0.1.1/TabNest.exe">TabNest.exe</a>
+        </div>
+        <div class="warn">
+          <h3>这是未签名版本</h3>
+          <p>没有 Authenticode 证书。首次运行 SmartScreen 可能提示「Windows 已保护你的电脑」。</p>
+          <ol>
+            <li>点「更多信息」，确认文件名是 TabNest.exe 或 TabNest-0.1.1-setup.exe。</li>
+            <li>再点「仍要运行」。安装包和装好的程序可能各拦一次。</li>
+            <li>杀软若隔离，只从本仓库的 GitHub Release 恢复。</li>
+            <li>需要签名版请自行购买 OV 证书再签；官方不提供已签名二进制。</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap foot">
+      <span>TabNest · MIT License · <a href="https://github.com/mtcto/TabNest">源码</a></span>
+      <span class="fine">独立项目，与 Stardock / Groupy 无隶属关系。视觉基于 Open Design 的 Raycast 设计系统。</span>
+    </div>
+  </footer>
+</body>
+</html>

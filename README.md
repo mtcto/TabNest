@@ -109,6 +109,8 @@ Loading a DLL into every running process is the standard way to solve this probl
 
 The tradeoff is honest and it is not free: staying outside means TabNest cannot draw into a window's real title bar, and focus transfer is constrained by Windows' foreground lock (see [Known limitations](#known-limitations)).
 
+**Homepage:** [https://mtcto.github.io/TabNest/](https://mtcto.github.io/TabNest/)
+
 ## Install
 
 From [Releases](../../releases) download either:

@@ -109,6 +109,8 @@ TabNest 押的是相反的一边：待在所有其他进程之外，代价用工
 
 这个取舍是诚实的，而且并不免费：待在外面意味着 TabNest 无法在窗口真正的标题栏上绘制，焦点转移也受 Windows 前台锁定的约束（见[已知限制](#已知限制)）。
 
+**主页：** [https://mtcto.github.io/TabNest/](https://mtcto.github.io/TabNest/)
+
 ## 安装
 
 从 [Releases](../../releases) 下载其一即可：
