@@ -15,6 +15,12 @@ namespace TabNest.App.Diagnostics;
 /// </summary>
 internal static class BenchmarkCommand
 {
+    /// <summary>空闲 CPU 采样时长（秒）。见采样处关于量化分辨率的说明。</summary>
+    private const int IdleSampleSeconds = 60;
+
+    /// <summary>Windows 调度时钟节拍，也是 TotalProcessorTime 的量化步长。</summary>
+    private const double TickMilliseconds = 15.6;
+
     /// <summary>阶段一目标。取自计划书第五章。</summary>
     private static readonly (string Name, double Target, double Groupy, string Unit)[] Targets =
     [
@@ -55,17 +61,33 @@ internal static class BenchmarkCommand
             // 给启动期的分配与 JIT 一点时间稳定下来。
             Thread.Sleep(TimeSpan.FromSeconds(3));
 
-            Console.WriteLine("正在采样空闲 CPU（20 秒）…");
+            // 采样 60 秒而不是 20 秒。
+            //
+            // TotalProcessorTime 的粒度是一个调度时钟节拍（约 15.6ms），20 秒窗口下
+            // 一个节拍就是 0.08 个百分点 —— 而门禁线是 0.10%，也就是说门禁只能分辨
+            // "0 个节拍"和"1 个节拍"，随手多记一拍就判失败。实测同一份代码连续跑
+            // 八次，读数在 0.00 / 0.08 / 0.16 / 0.23 之间跳，正是 0/1/2/3 拍。
+            //
+            // 把窗口拉长到 60 秒，一拍降到 0.026 个百分点，门禁才有分辨能力。
+            // **门禁线必须高于测量分辨率**，否则它测的是量化噪声，不是被测对象。
+            Console.WriteLine($"正在采样空闲 CPU（{IdleSampleSeconds} 秒）…");
 
             target.Refresh();
             var cpuBefore = target.TotalProcessorTime;
             var wall = Stopwatch.StartNew();
-            Thread.Sleep(TimeSpan.FromSeconds(20));
+            Thread.Sleep(TimeSpan.FromSeconds(IdleSampleSeconds));
             wall.Stop();
 
             target.Refresh();
             var cpuUsed = (target.TotalProcessorTime - cpuBefore).TotalMilliseconds;
             var idleCpu = cpuUsed / wall.Elapsed.TotalMilliseconds * 100.0;
+
+            // 同时报出原始毫秒与量化步长，读数才可解释：
+            // 0.026% 与 0.00% 的差别是"一个节拍"，不是"多了 30% 的开销"。
+            Console.WriteLine(
+                $"    （占用 {cpuUsed:F0} ms / {wall.Elapsed.TotalSeconds:F0} s，"
+                + $"量化步长约 {TickMilliseconds / (wall.Elapsed.TotalMilliseconds / 100.0):F3} 个百分点）");
+            Console.WriteLine();
 
             var workingSet = target.WorkingSet64 / 1024.0 / 1024.0;
             var threads = target.Threads.Count;

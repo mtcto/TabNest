@@ -12,7 +12,7 @@ dotnet publish src/TabNest.App -c Release -r win-x64 -o publish/v1 --self-contai
 iscc packaging/TabNest.iss
 ```
 
-产物在 `publish/installer/TabNest-0.1.1-setup.exe`。
+产物在 `publish/installer/TabNest-0.1.2-setup.exe`。
 
 发布产物是**单个自包含 exe**（11.1 MB）：不需要 .NET 运行时，不需要 VC++ 运行库。
 安装包本身只是为了提供开始菜单项、开机自启选项与干净的卸载流程——
