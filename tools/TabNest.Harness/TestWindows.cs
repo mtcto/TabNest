@@ -336,6 +336,122 @@ internal static partial class TestWindows
         return window;
     }
 
+    /// <summary>
+    /// 声明了独立 AppUserModelID 的窗口。
+    ///
+    /// 复现 Chrome 的 PWA（安装到桌面的网页应用）：它与普通浏览器窗口跑在
+    /// **同一个 chrome.exe 进程**里，用的还是同一个窗口类 Chrome_WidgetWin_1 ——
+    /// 从进程名和窗口类完全看不出这是两个不同的应用。唯一的区别是 AppUserModelID，
+    /// 而那正是 Windows 任务栏用来决定 PWA 单独占一个图标的依据。实测：
+    ///   普通 Chrome 窗口   Chrome
+    ///   Grok PWA 窗口      Chrome._crx_ggjocahimgbfhghnlfcnjemagj
+    ///
+    /// 曾经「自动把同类窗口合并到一组」只比进程名，于是组里只要有一个 PWA，
+    /// 用户新开的任意 Chrome 窗口都会被吞进去，并伴随持续闪烁。
+    /// </summary>
+    public static Window CreateDistinctAppId()
+    {
+        var window = Decorate(new Window(), "独立应用标识", Brushes.DarkCyan,
+            "与其他测试窗口同进程、同窗口类，但声明了独立的 AppUserModelID。\n"
+            + "模拟 Chrome PWA：它不该和普通窗口被认成同一个应用。");
+
+        window.SourceInitialized += (_, _) =>
+        {
+            var handle = new WindowInteropHelper(window).Handle;
+
+            if (handle != 0)
+            {
+                SetAppUserModelId(handle, $"TabNest.Harness.FakePwa.{Guid.NewGuid():N}");
+            }
+        };
+
+        return window;
+    }
+
+    /// <summary>给窗口打上显式的 AppUserModelID，与 Chrome 给 PWA 窗口做的事一致。</summary>
+    private static void SetAppUserModelId(nint hwnd, string id)
+    {
+        var iid = new Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"); // IID_IPropertyStore
+
+        if (SHGetPropertyStoreForWindow(hwnd, in iid, out var native) < 0 || native == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            if (Marshal.GetObjectForIUnknown(native) is not IPropertyStore store)
+            {
+                return;
+            }
+
+            var key = new PropertyKey
+            {
+                FormatId = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+                PropertyId = 5,
+            };
+
+            var value = new PropVariant
+            {
+                Type = 31, // VT_LPWSTR
+                Pointer = Marshal.StringToCoTaskMemUni(id),
+            };
+
+            try
+            {
+                store.SetValue(in key, in value);
+                store.Commit();
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem(value.Pointer);
+                Marshal.FinalReleaseComObject(store);
+            }
+        }
+        finally
+        {
+            Marshal.Release(native);
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PropertyKey
+    {
+        public Guid FormatId;
+        public uint PropertyId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PropVariant
+    {
+        public ushort Type;
+        public ushort Reserved1;
+        public ushort Reserved2;
+        public ushort Reserved3;
+        public nint Pointer;
+        public nint Tail;
+    }
+
+    [ComImport]
+    [Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IPropertyStore
+    {
+        void GetCount(out uint count);
+
+        void GetAt(uint index, out PropertyKey key);
+
+        void GetValue(in PropertyKey key, out PropVariant value);
+
+        void SetValue(in PropertyKey key, in PropVariant value);
+
+        void Commit();
+    }
+
+    [LibraryImport("shell32.dll")]
+    private static partial int SHGetPropertyStoreForWindow(
+        nint hwnd, in Guid riid, out nint ppv);
+
     private const int SW_HIDE = 0;
     private const uint WS_CHILD = 0x40000000;
     private const uint WS_VISIBLE = 0x10000000;

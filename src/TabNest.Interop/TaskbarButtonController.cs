@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using TabNest.Core.Diagnostics;
 using TabNest.Interop.Native;
 
 namespace TabNest.Interop;
@@ -13,13 +14,21 @@ namespace TabNest.Interop;
 /// 且必须隐藏重显才能生效，破坏性高得多。
 ///
 /// COM 对象有线程亲和性，必须始终在创建它的 STA 线程上使用 —— 即 WindowController 的工作线程。
+///
+/// 接口调用手写 vtable 而不用 [ComImport]：裁剪会关掉内置 COM 互操作，
+/// 而这里曾经就是那样在每个发布版里静默失效的，详见 <see cref="ComObject"/>。
 /// </summary>
-internal sealed class TaskbarButtonController : IDisposable
+internal sealed unsafe class TaskbarButtonController : IDisposable
 {
     private static readonly Guid ClsidTaskbarList = new("56FDF344-FD6D-11D0-958A-006097C9A090");
     private static readonly Guid IidTaskbarList = new("56FDF342-FD6D-11D0-958A-006097C9A090");
 
-    private ITaskbarList? _taskbar;
+    // ITaskbarList vtable：0-2 IUnknown，3 HrInit，4 AddTab，5 DeleteTab，6 ActivateTab，7 SetActiveAlt。
+    private const int HrInitSlot = 3;
+    private const int AddTabSlot = 4;
+    private const int DeleteTabSlot = 5;
+
+    private nint _taskbar;
     private bool _initFailed;
 
     /// <summary>
@@ -32,10 +41,18 @@ internal sealed class TaskbarButtonController : IDisposable
     /// </summary>
     private readonly Dictionary<nint, uint> _hidden = [];
 
+    /// <summary>
+    /// 任务栏接口本身是否可用。
+    ///
+    /// 用来把"拒绝操作这个窗口"和"整个策略压根没在工作"区分开 ——
+    /// 两者都表现为操作没发生，但前者是正确行为，后者是必须暴露的缺陷。
+    /// </summary>
+    public bool IsAvailable => EnsureTaskbar() != 0;
+
     public bool SetVisible(nint hwnd, bool visible)
     {
         var taskbar = EnsureTaskbar();
-        if (taskbar is null)
+        if (taskbar == 0)
         {
             return false;
         }
@@ -61,13 +78,13 @@ internal sealed class TaskbarButtonController : IDisposable
                     return false;
                 }
 
-                taskbar.AddTab(hwnd);
+                Invoke(taskbar, AddTabSlot, hwnd);
                 _hidden.Remove(hwnd);
             }
             else
             {
                 _ = User32.GetWindowThreadProcessId(hwnd, out var pid);
-                taskbar.DeleteTab(hwnd);
+                Invoke(taskbar, DeleteTabSlot, hwnd);
                 _hidden[hwnd] = pid;
             }
 
@@ -82,7 +99,7 @@ internal sealed class TaskbarButtonController : IDisposable
     /// <summary>还原所有被隐藏的任务栏按钮。退出、停用主开关、崩溃恢复时都必须调用。</summary>
     public void RestoreAll()
     {
-        if (_taskbar is null || _hidden.Count == 0)
+        if (_taskbar == 0 || _hidden.Count == 0)
         {
             return;
         }
@@ -98,18 +115,16 @@ internal sealed class TaskbarButtonController : IDisposable
                 continue;
             }
 
-            try
-            {
-                _taskbar.AddTab(hwnd);
-            }
-            catch (COMException)
-            {
-                // 窗口可能已经销毁，忽略。
-            }
+            // 窗口可能已经销毁，AddTab 失败无所谓，忽略返回值。
+            Invoke(_taskbar, AddTabSlot, hwnd);
         }
 
         _hidden.Clear();
     }
+
+    /// <summary>调 ITaskbarList 上一个只收 HWND 的方法。</summary>
+    private static int Invoke(nint taskbar, int slot, nint hwnd) =>
+        ((delegate* unmanaged[Stdcall]<nint, nint, int>)ComObject.Method(taskbar, slot))(taskbar, hwnd);
 
     /// <summary>
     /// 这个窗口按系统规则本来就该拥有任务栏按钮吗？
@@ -120,87 +135,63 @@ internal sealed class TaskbarButtonController : IDisposable
     internal static bool CanOwnTaskbarButton(nint hwnd) =>
         hwnd != 0 && User32.IsWindow(hwnd) && WindowEnumerator.IsTopLevel(hwnd);
 
-    private ITaskbarList? EnsureTaskbar()
+    private nint EnsureTaskbar()
     {
-        if (_taskbar is not null)
+        if (_taskbar != 0)
         {
             return _taskbar;
         }
 
         if (_initFailed)
         {
-            return null;
+            return 0;
         }
 
-        try
-        {
-            // 走 CoCreateInstance 而非 Activator + GetTypeFromCLSID：
-            // 后者经由反射解析类型，裁剪器无法静态分析（IL2072），会让整个应用无法裁剪。
-            var hr = Ole32.CoCreateInstance(
-                in ClsidTaskbarList,
-                pUnkOuter: 0,
-                Ole32.CLSCTX_INPROC_SERVER,
-                in IidTaskbarList,
-                out var native);
+        // 走 CoCreateInstance 而非 Activator + GetTypeFromCLSID：
+        // 后者经由反射解析类型，裁剪器无法静态分析（IL2072），会让整个应用无法裁剪。
+        var hr = Ole32.CoCreateInstance(
+            in ClsidTaskbarList,
+            pUnkOuter: 0,
+            Ole32.CLSCTX_INPROC_SERVER,
+            in IidTaskbarList,
+            out var instance);
 
-            if (hr < 0 || native == 0)
-            {
-                _initFailed = true;
-                return null;
-            }
-
-            // 拿到原始接口指针后交给运行时包装。GetObjectForIUnknown 会自己 AddRef，
-            // 因此必须释放 CoCreateInstance 给我们的那一次引用，否则对象永不析构。
-            try
-            {
-                if (Marshal.GetObjectForIUnknown(native) is not ITaskbarList instance)
-                {
-                    _initFailed = true;
-                    return null;
-                }
-
-                instance.HrInit();
-                _taskbar = instance;
-                return _taskbar;
-            }
-            finally
-            {
-                Marshal.Release(native);
-            }
-        }
-        catch (Exception ex) when (ex is COMException or InvalidCastException or NotSupportedException)
+        if (hr < 0 || instance == 0)
         {
             // 任务栏按钮策略是增强功能，拿不到接口时降级为"保留所有按钮"，
-            // 不该让整个产品启动失败。
+            // 不该让整个产品启动失败 —— 但**必须留下痕迹**。
+            //
+            // 这里曾经是静默失败：用 [ComImport] 时裁剪发布版里内置 COM 被关掉，
+            // 整个策略在每个发布版里都不工作，而日志里一个字都没有，
+            // 从外面完全看不出来。降级可以，无声降级不行。
+            FileLog.Warn($"拿不到 ITaskbarList（hr=0x{hr:X8}），任务栏按钮策略本次不可用。");
             _initFailed = true;
-            return null;
+            return 0;
         }
+
+        var init = ((delegate* unmanaged[Stdcall]<nint, int>)
+            ComObject.Method(instance, HrInitSlot))(instance);
+
+        if (init < 0)
+        {
+            FileLog.Warn($"ITaskbarList::HrInit 失败（hr=0x{init:X8}），任务栏按钮策略本次不可用。");
+            ComObject.Release(instance);
+            _initFailed = true;
+            return 0;
+        }
+
+        _taskbar = instance;
+        return _taskbar;
     }
 
     public void Dispose()
     {
         RestoreAll();
 
-        if (_taskbar is not null)
+        if (_taskbar != 0)
         {
-            Marshal.FinalReleaseComObject(_taskbar);
-            _taskbar = null;
+            ComObject.Release(_taskbar);
+            _taskbar = 0;
         }
-    }
-
-    [ComImport]
-    [Guid("56FDF342-FD6D-11D0-958A-006097C9A090")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface ITaskbarList
-    {
-        void HrInit();
-
-        void AddTab(nint hwnd);
-
-        void DeleteTab(nint hwnd);
-
-        void ActivateTab(nint hwnd);
-
-        void SetActiveAlt(nint hwnd);
     }
 }

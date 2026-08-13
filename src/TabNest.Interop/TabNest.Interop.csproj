@@ -8,6 +8,16 @@
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <RootNamespace>TabNest.Interop</RootNamespace>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+
+    <!--
+      COM 接口一律手写 vtable 调用，因此需要函数指针。
+
+      不能用 [ComImport]：裁剪会把 BuiltInComInterop.IsSupported 关成 false
+      （见发布产物的 runtimeconfig.json），于是 Marshal.GetObjectForIUnknown
+      在发布版里直接抛 NotSupportedException。这不是理论风险 ——
+      任务栏按钮策略就这样在每一个发布版里静默失效过，而 Debug 下一切正常。
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

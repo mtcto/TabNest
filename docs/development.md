@@ -59,6 +59,39 @@ WPF 不支持裁剪（启用 `PublishTrimmed` 时 SDK 直接报 `NETSDK1168` 拒
 
 "全屏后分组栏仍可见"曾经测试全绿而功能全坏：测试直接调 `OnLocationChanged`，而系统真实的双击标题栏是 `MOVESIZESTART → 位置变化 → MOVESIZEEND`，首尾两个拖拽事件走的是完全不同的分支。
 
+### 回归测试必须在发布产物上跑一遍
+
+`dotnet build` 出来的 Debug 构建和裁剪单文件发布**不是同一个运行时环境**。
+
+裁剪会把一批特性开关关掉，直接写进发布产物的 `runtimeconfig.json`。其中之一是：
+
+```
+"System.Runtime.InteropServices.BuiltInComInterop.IsSupported": false
+```
+
+于是所有 `[ComImport]` 接口在发布版里都不工作，`Marshal.GetObjectForIUnknown`
+一律抛 `NotSupportedException`。
+
+这不是理论风险。任务栏按钮策略用 `[ComImport]` 声明 `ITaskbarList`，
+Debug 下工作正常、全部测试通过，而**每一个发布版里它都静默失效** ——
+异常被 catch 吞掉，降级成"保留所有按钮"，日志里一个字都没有。
+后来 AppUserModelID 判定踩了同一个坑，才在"拿发布产物再跑一遍 `--quirktest`"时暴露。
+
+因此：
+
+- COM 接口一律手写 vtable 函数指针（见 `Native/ComObject.cs`），不用 `[ComImport]`；
+- 发版前必须执行 `publish\v1\TabNest.exe --quirktest`，不能只跑 Debug；
+- **降级可以，无声降级不行。** 拿不到接口要打日志，并让指令如实返回失败。
+
+### 每条负向断言都要配一条正向对照
+
+"没有发生某件坏事"这类断言，在功能整个没跑起来时同样成立。
+
+「拒绝为子窗口创建任务栏按钮」在任务栏接口彻底不可用时照样通过 ——
+两种情况都表现为"操作没发生"。所以旁边必须有一条「任务栏接口确实可用」。
+同理，「普通窗口没有被 PWA 的组吞掉」旁边必须有「真正同应用的窗口仍会被自动分组」，
+否则自动分组开关没开、资格判定拦下、窗口没找到……任何一种都会让它平凡通过。
+
 ### 断言基准要选与故障无关的量
 
 同一个功能上还栽过第二跤：拿分组栏底边当基准判断"窗口是否让出了顶部空间"。分组栏一旦被顶出屏幕，底边就是 0，"窗口顶边 ≥ 0" 恒真 —— 这条断言恰好在最该报警的时候保持沉默。
@@ -77,6 +110,7 @@ WPF 不支持裁剪（启用 `PublishTrimmed` 时 SDK 直接报 `NETSDK1168` 拒
 | `hideonclose` | Electron 应用的"关闭即缩托盘" | 关闭窗口时只隐藏、永不发销毁事件。只监听销毁事件的话，窗口没了而标签还在 |
 | `fixed` | OpenVPN Connect、各类登录框 | 尺寸被自身约束夹死，上报的回声若被当成"用户改了大小"，会把同组的大窗口一路拽小 |
 | `child` | Chrome Legacy Window | 有标题、可见、非工具窗的**子**窗口，从常规特征完全看不出它不该被分组 |
+| `pwa` | Chrome 的 PWA 窗口 | 与其他窗口同进程、同窗口类，只有 AppUserModelID 不同。自动分组只比进程名时，组里有一个 PWA 就会把用户新开的浏览器窗口全吞进去 |
 | `slow` | 卡住的 IDE | UI 线程阻塞，用来验证同步消息的超时保护 |
 
 「全屏后分组栏仍然可见」曾经用两个普通 WPF 窗口测得全绿，而功能在真实应用上完全失效 —— WPF 窗口老实接受重定位，Chromium 不接受。

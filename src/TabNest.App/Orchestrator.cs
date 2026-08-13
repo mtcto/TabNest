@@ -267,9 +267,23 @@ internal sealed class Orchestrator : IDisposable
         }
 
         // 找一个已有的、同应用的组。找不到就什么也不做。
+        //
+        // "同应用"不能只看进程名。Chrome 的 PWA 窗口（安装到桌面的网页应用）与普通
+        // 浏览器窗口跑在同一个 chrome.exe 里、用同一个窗口类，只比进程名的话，
+        // 组里只要有一个 PWA，用户新开的任意 Chrome 窗口都会被吞进去 ——
+        // 而在用户眼里 PWA 和浏览器根本是两个应用（任务栏上也是两个图标）。
+        //
+        // 因此再比一次 AppUserModelID：这正是 Windows 自己用来归并任务栏图标的值。
+        // 读不到时（多数桌面应用都不设）两边都是 null，退化为纯进程名比较。
+        var candidateAppId = AppUserModelId.Read(hwnd);
+
         var target = _manager.Groups.FirstOrDefault(g =>
             g.LiveTabs.Any(t =>
-                string.Equals(t.ProcessName, window.ProcessName, StringComparison.OrdinalIgnoreCase)));
+                string.Equals(t.ProcessName, window.ProcessName, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(
+                    AppUserModelId.Read(t.Identity.Handle),
+                    candidateAppId,
+                    StringComparison.OrdinalIgnoreCase)));
 
         if (target is null)
         {
@@ -1149,6 +1163,32 @@ internal sealed class Orchestrator : IDisposable
         // 测试里不跑事件循环，直接走事件会走到的同一条处理路径。
         OnLocationChanged(hwnd);
         OnDragEnd(hwnd);
+    }
+
+    /// <summary>
+    /// 测试入口：模拟某个窗口刚刚出现，走一遍自动分组判定。
+    ///
+    /// 临时打开自动分组开关再复原 —— 测试不该依赖跑测试这台机器上的用户设置，
+    /// 否则同一份代码在开关关着的机器上"通过"，只是因为整条路径压根没执行。
+    /// </summary>
+    internal void AutoGroupForTest(nint hwnd)
+    {
+        var previous = _settings;
+
+        _settings = _settings with
+        {
+            Enabled = true,
+            Grouping = _settings.Grouping with { AutoGroupIdenticalWindows = true },
+        };
+
+        try
+        {
+            OnWindowShown(hwnd);
+        }
+        finally
+        {
+            _settings = previous;
+        }
     }
 
     /// <summary>测试入口：模拟用户双击分组栏空白处。</summary>

@@ -24,4 +24,8 @@ internal static partial class Ole32
         uint dwClsContext,
         in Guid riid,
         out nint ppv);
+
+    /// <summary>释放 COM 分配的内存。PROPVARIANT 里的字符串由调用方负责释放。</summary>
+    [LibraryImport(Lib)]
+    public static partial void CoTaskMemFree(nint pv);
 }

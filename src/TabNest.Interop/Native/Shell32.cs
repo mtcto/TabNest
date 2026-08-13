@@ -54,6 +54,16 @@ internal static partial class Shell32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool Shell_NotifyIcon(uint dwMessage, ref NOTIFYICONDATA lpData);
 
+    /// <summary>
+    /// 取窗口的 shell 属性存储。用于读 AppUserModelID —— 跨进程有效。
+    ///
+    /// 这是 Windows 自己判定"两个窗口属不属于同一个应用"的依据：
+    /// 任务栏正是按它决定图标怎么归并的。
+    /// </summary>
+    [LibraryImport("shell32.dll")]
+    public static partial int SHGetPropertyStoreForWindow(
+        nint hwnd, in Guid riid, out nint ppv);
+
     /// <summary>从可执行文件提取图标。用于在标签上显示应用图标。</summary>
     [LibraryImport("shell32.dll", EntryPoint = "ExtractIconExW", SetLastError = true,
         StringMarshalling = StringMarshalling.Utf16)]

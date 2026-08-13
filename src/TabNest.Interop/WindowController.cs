@@ -547,9 +547,20 @@ public sealed class WindowController : IDisposable
         // 但"拒绝给不该有按钮的窗口造按钮"必须如实上报。
         // 静默吞掉的话，这条不变量就没有任何测试抓手 ——
         // 而它一旦破防，用户会多出一个点进去什么都没有、又找不到来源的幽灵条目。
-        if (!applied && visible && !TaskbarButtonController.CanOwnTaskbarButton(hwnd))
+        if (!applied)
         {
-            return OperationResult.Fail("该窗口不该拥有任务栏按钮，已拒绝为它创建。");
+            if (visible && !TaskbarButtonController.CanOwnTaskbarButton(hwnd))
+            {
+                return OperationResult.Fail("该窗口不该拥有任务栏按钮，已拒绝为它创建。");
+            }
+
+            // 接口拿不到 = 整个策略没在工作，这与"拒绝某个窗口"是两回事。
+            // 曾经两者都被当成"无事发生"，于是任务栏策略在每个裁剪发布版里
+            // 静默失效而无人察觉 —— 降级可以，无声降级不行。
+            if (!_taskbar.IsAvailable)
+            {
+                return OperationResult.Fail("拿不到 ITaskbarList，任务栏按钮策略不可用。");
+            }
         }
 
         return Done(ActivationLevel.NotAttempted, stopwatch);

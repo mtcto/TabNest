@@ -140,6 +140,7 @@ internal sealed class LauncherWindow : Window
             "hideonclose" or "hide" => TestWindows.CreateHideOnClose,
             "child" or "titledchild" => TestWindows.CreateWithTitledChild,
             "stubborn" or "stubbornmax" => TestWindows.CreateStubbornMaximize,
+            "pwa" or "appid" => TestWindows.CreateDistinctAppId,
             _ => null,
         };
 

@@ -55,6 +55,10 @@ internal static class QuirkTestCommand
             Console.Error.WriteLine(
                 "需要四个特定的 Harness 窗口。请先运行：\n"
                 + "  TabNest.Harness.exe --spawn normal,fixed,hideonclose,hideonclose");
+            Console.Error.WriteLine(
+                "覆盖全部场景则用：\n"
+                + "  TabNest.Harness.exe --spawn "
+                + "normal,normal,normal,stubborn,fixed,hideonclose,hideonclose,child,pwa,pwa");
             return 1;
         }
 
@@ -71,6 +75,8 @@ internal static class QuirkTestCommand
         failures += TestHideOnCloseMember(orchestrator, hiders[0], hiders[1]);
         Console.WriteLine();
         failures += TestBatchAdoption(orchestrator, windows);
+        Console.WriteLine();
+        failures += TestDistinctAppIdAutoGroup(orchestrator, windows);
 
         orchestrator.DissolveEverything();
         PumpMessages(TimeSpan.FromMilliseconds(500));
@@ -266,6 +272,106 @@ internal static class QuirkTestCommand
     }
 
     /// <summary>
+    /// 同进程但不同应用的窗口，不得被自动分组认成同类。
+    ///
+    /// Chrome 的 PWA 窗口与普通浏览器窗口跑在同一个 chrome.exe 里、用同一个窗口类，
+    /// 只比进程名的话完全无法区分。用户的现象是：组里只要有一个 PWA，
+    /// 之后点开 Chrome 就会被自动吞进那个组，并伴随持续闪烁 ——
+    /// 而在用户眼里 PWA 和浏览器是两个应用（任务栏上也是两个图标）。
+    ///
+    /// 判据用 AppUserModelID，这正是 Windows 自己归并任务栏图标的依据。
+    /// </summary>
+    private static int TestDistinctAppIdAutoGroup(
+        Orchestrator orchestrator, List<WindowInfo> harnessWindows)
+    {
+        Console.WriteLine("── 同进程不同应用不得被自动分组 ──");
+
+        var failures = 0;
+
+        var fakePwas = harnessWindows
+            .Where(w => w.Title.Contains("独立应用标识", StringComparison.Ordinal))
+            .ToList();
+
+        var normals = harnessWindows
+            .Where(w => w.Title.Contains("普通窗口", StringComparison.Ordinal))
+            .ToList();
+
+        if (fakePwas.Count < 2 || normals.Count < 3)
+        {
+            Console.WriteLine(
+                "[跳过] 需要两个「独立应用标识」窗口和三个「普通窗口」：\n"
+                + "       TabNest.Harness.exe --spawn normal,normal,normal,pwa,pwa");
+            return failures;
+        }
+
+        // 先确认判据本身在真实窗口上成立 —— 同进程、同窗口类，但应用标识不同。
+        // 这一条挂了，后面两条断言的结论都不可信。
+        var pwaId = AppUserModelId.Read(fakePwas[0].Identity.Handle);
+        var normalId = AppUserModelId.Read(normals[0].Identity.Handle);
+
+        Console.WriteLine($"PWA 标识 {pwaId ?? "(无)"}，普通窗口标识 {normalId ?? "(无)"}");
+
+        failures += Check(
+            "同进程的两个窗口拥有不同的应用标识",
+            !string.IsNullOrEmpty(pwaId) && !string.Equals(pwaId, normalId, StringComparison.Ordinal),
+            "读不到差异 —— 判据不成立，本节其余结论均不可信");
+
+        // 负向：组里只有 PWA，新出现的普通窗口不该被吞进去。
+        orchestrator.MergeForTest(fakePwas[1].Identity.Handle, fakePwas[0].Identity.Handle);
+        PumpMessages(TimeSpan.FromSeconds(1));
+
+        var pwaGroup = orchestrator.GroupsForTest.FirstOrDefault();
+
+        failures += Check("已建出仅含 PWA 的组", pwaGroup is not null, "没有建出组");
+
+        if (pwaGroup is not null)
+        {
+            orchestrator.AutoGroupForTest(normals[0].Identity.Handle);
+            PumpMessages(TimeSpan.FromSeconds(1));
+
+            var adopted = orchestrator.GroupsForTest
+                .SelectMany(g => g.LiveTabs)
+                .Any(t => t.Identity.Handle == normals[0].Identity.Handle);
+
+            failures += Check(
+                "普通窗口没有被 PWA 的组吞掉",
+                !adopted,
+                "普通窗口被自动并入了只含 PWA 的组 —— 用户点开浏览器就会被抓走");
+        }
+
+        orchestrator.DissolveEverything();
+        PumpMessages(TimeSpan.FromMilliseconds(800));
+
+        // 正向对照，不可省。
+        //
+        // 少了这一条，"没被吞掉"可能只是因为自动分组压根没执行（开关没开、
+        // 资格判定拦下、窗口找不到……），修复与否都是绿的。
+        // 必须证明同一条路径在**该分组时确实会分组**。
+        orchestrator.MergeForTest(normals[1].Identity.Handle, normals[0].Identity.Handle);
+        PumpMessages(TimeSpan.FromSeconds(1));
+
+        if (orchestrator.GroupsForTest.FirstOrDefault() is not null)
+        {
+            orchestrator.AutoGroupForTest(normals[2].Identity.Handle);
+            PumpMessages(TimeSpan.FromSeconds(1));
+
+            var adoptedSameApp = orchestrator.GroupsForTest
+                .SelectMany(g => g.LiveTabs)
+                .Any(t => t.Identity.Handle == normals[2].Identity.Handle);
+
+            failures += Check(
+                "真正同应用的窗口仍会被自动分组（正向对照）",
+                adoptedSameApp,
+                "同应用窗口也没被分组 —— 自动分组整个失效了，上一条断言不成立");
+        }
+
+        orchestrator.DissolveEverything();
+        PumpMessages(TimeSpan.FromMilliseconds(800));
+
+        return failures;
+    }
+
+    /// <summary>
     /// 有标题的子窗口绝不能被当成可分组窗口。
     ///
     /// Chrome 的「Chrome Legacy Window」就是这个形态：渲染窗口的子窗口，
@@ -350,6 +456,30 @@ internal static class QuirkTestCommand
             "拒绝为子窗口创建任务栏按钮",
             refused.Count > 0 && !refused[0].Success,
             "执行层接受了为子窗口创建任务栏按钮 —— 用户会多出一个点不动的幽灵条目");
+
+        // 正向对照：对一个正常顶层窗口的隐藏与还原必须真的成功。
+        //
+        // 不可省。上面那条断言在「任务栏接口整个不可用」时同样通过 ——
+        // 两种情况都表现为"操作没发生"。而这恰恰真实发生过：ITaskbarList 曾用
+        // [ComImport] 声明，裁剪把内置 COM 互操作关掉，于是任务栏按钮策略
+        // 在**每一个发布版里**都不工作，Debug 下却一切正常、测试全绿。
+        //
+        // 这条断言必须在发布产物上跑才有意义：
+        //   publish\v1\TabNest.exe --quirktest
+        var hidden = controller
+            .ExecuteAsync(new Core.Grouping.SetTaskbarButtonAction(host.Identity, Visible: false))
+            .GetAwaiter().GetResult();
+
+        var shown = controller
+            .ExecuteAsync(new Core.Grouping.SetTaskbarButtonAction(host.Identity, Visible: true))
+            .GetAwaiter().GetResult();
+
+        failures += Check(
+            "任务栏接口确实可用（正向对照）",
+            hidden.Count > 0 && hidden[0].Success && shown.Count > 0 && shown[0].Success,
+            "隐藏或还原任务栏按钮失败："
+                + $"{(hidden.Count > 0 ? hidden[0].Message : "无结果")}"
+                + $" / {(shown.Count > 0 ? shown[0].Message : "无结果")}");
 
         return failures;
     }
