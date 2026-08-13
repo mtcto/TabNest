@@ -201,11 +201,51 @@ internal static partial class TestWindows
         return window;
     }
 
+    /// <summary>
+    /// 带一个「有标题的可见子窗口」的窗口。
+    ///
+    /// 复现 Chrome 的「Chrome Legacy Window」：它是渲染窗口的子窗口，
+    /// 无障碍接口被触发时才创建，有标题、可见、非工具窗 ——
+    /// 从"有没有标题""是不是工具窗"这些角度完全看不出它不该被分组。
+    ///
+    /// 曾经它被自动分组收编进组里，用户莫名多出一个点不动的空白标签。
+    /// 根因是判定顶层窗口的过滤只写在枚举路径上，而自动分组走的是窗口事件，
+    /// 直接对任意 HWND 调 Describe，绕开了那道过滤。
+    /// </summary>
+    public static Window CreateWithTitledChild()
+    {
+        var window = Decorate(new Window(), "含子窗口", Brushes.SlateBlue,
+            "内部有一个有标题、可见的子窗口（模拟 Chrome Legacy Window）。\n"
+            + "它绝不能出现在候选列表里，也绝不能被自动分组收编。");
+
+        window.SourceInitialized += (_, _) =>
+        {
+            var parent = new WindowInteropHelper(window).Handle;
+
+            if (parent != 0)
+            {
+                _ = CreateWindowEx(
+                    0, "STATIC", "Chrome Legacy Window", WS_CHILD | WS_VISIBLE,
+                    0, 0, 200, 40, parent, 0, 0, 0);
+            }
+        };
+
+        return window;
+    }
+
     private const int SW_HIDE = 0;
+    private const uint WS_CHILD = 0x40000000;
+    private const uint WS_VISIBLE = 0x10000000;
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool ShowWindow(nint hWnd, int nCmdShow);
+
+    [LibraryImport("user32.dll", EntryPoint = "CreateWindowExW",
+        StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    private static partial nint CreateWindowEx(
+        uint dwExStyle, string lpClassName, string? lpWindowName, uint dwStyle,
+        int x, int y, int w, int h, nint parent, nint menu, nint instance, nint param);
 
     private static Window Decorate(Window window, string label, Brush accent, string description)
     {

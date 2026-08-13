@@ -62,6 +62,8 @@ internal static class QuirkTestCommand
         using var dispatcher = new UiDispatcher();
         using var orchestrator = new Orchestrator(dispatcher);
 
+        failures += TestTitledChildWindow(enumerator);
+        Console.WriteLine();
         failures += TestFixedSizeMember(orchestrator, normal, fixedSize);
         Console.WriteLine();
         failures += TestHideOnCloseMember(orchestrator, hiders[0], hiders[1]);
@@ -75,6 +77,74 @@ internal static class QuirkTestCommand
         Console.WriteLine(failures == 0 ? "全部通过。" : $"{failures} 项未通过。");
 
         return failures == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// 有标题的子窗口绝不能被当成可分组窗口。
+    ///
+    /// Chrome 的「Chrome Legacy Window」就是这个形态：渲染窗口的子窗口，
+    /// 无障碍接口被触发时才创建，有标题、可见、非工具窗 ——
+    /// 从"有没有标题""是不是工具窗"这些角度完全看不出它不该被分组。
+    ///
+    /// 它曾被自动分组收编进组里，用户莫名多出一个点不动的空白标签。
+    /// 根因是顶层窗口的判定只写在枚举的预过滤里，而自动分组走窗口事件、
+    /// 直接对任意 HWND 调 Describe，绕开了那道过滤。
+    /// </summary>
+    private static int TestTitledChildWindow(WindowEnumerator enumerator)
+    {
+        Console.WriteLine("── 有标题的子窗口不得被分组 ──");
+
+        var failures = 0;
+
+        // 枚举出的窗口里绝不该出现子窗口。
+        var enumerated = enumerator.Enumerate().ToList();
+
+        var childrenInList = enumerated
+            .Where(w => !WindowEnumerator.IsTopLevel(w.Identity.Handle))
+            .ToList();
+
+        failures += Check(
+            "候选列表里没有子窗口",
+            childrenInList.Count == 0,
+            $"混进了 {childrenInList.Count} 个子窗口："
+            + string.Join("、", childrenInList.Select(w => w.Title)));
+
+        // 找一个真实存在的子窗口，直接对它调 Describe —— 这正是自动分组走的那条路。
+        var host = enumerated.FirstOrDefault(w =>
+            w.Title.Contains("含子窗口", StringComparison.Ordinal));
+
+        if (host is null)
+        {
+            Console.WriteLine(
+                "[跳过] 没有「含子窗口」测试窗口。加上它可覆盖更严格的场景：\n"
+                + "       TabNest.Harness.exe --spawn normal,normal,child");
+
+            return failures;
+        }
+
+        var child = WindowEnumerator.FindChildWindow(host.Identity.Handle, "Chrome Legacy Window");
+
+        failures += Check(
+            "测试子窗口确实存在",
+            child != 0,
+            "没找到子窗口，本项无法验证");
+
+        if (child == 0)
+        {
+            return failures;
+        }
+
+        failures += Check(
+            "子窗口不被判定为顶层窗口",
+            !WindowEnumerator.IsTopLevel(child),
+            "子窗口被当成了顶层窗口");
+
+        failures += Check(
+            "Describe 拒绝描述子窗口",
+            enumerator.Describe(child) is null,
+            "Describe 仍然为子窗口返回了描述 —— 自动分组会把它收编进组里");
+
+        return failures;
     }
 
     /// <summary>

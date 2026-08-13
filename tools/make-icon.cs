@@ -1,79 +1,68 @@
 #:package System.Drawing.Common@9.0.0
+#:property ManagePackageVersionsCentrally=false
+#:property TreatWarningsAsErrors=false
 
-// 把 logo 转成多尺寸 ICO。
+// 按尺寸矢量绘制应用图标，再打成多档 ICO。
 //
-// 一次性的构建工具，不进产品：产品本身刻意不依赖 System.Drawing
-// （它在 .NET 里已是独立 NuGet 包，且不利于裁剪）。
+// 一次性的构建工具，不进产品：产品本身刻意不依赖 System.Drawing。
+// 托盘 16/20/24 按整像素格子画，不从大图缩小 —— 插画缩到 16px 会糊成一团。
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 
-var source = args.Length > 0 ? args[0] : @"D:\dev\workspace\TabNest\logo.jpg";
-var target = args.Length > 1 ? args[1] : @"D:\dev\workspace\TabNest\src\TabNest.App\TabNest.ico";
+var repo = FindRepoRoot();
+var target = args.Length > 0 ? args[0] : Path.Combine(repo, "src", "TabNest.App", "TabNest.ico");
+var assets = Path.Combine(repo, "assets");
 
 // Windows 会按显示场景挑最合适的尺寸：托盘 16/20/24，任务栏 32/40，
 // Alt+Tab 与文件资源管理器大图标 48/64，属性对话框与商店 256。
-// 缺哪一档系统就得现场缩放，缩出来的图在小尺寸下会糊成一团。
 int[] sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256];
 
-using var original = new Bitmap(source);
-Console.WriteLine($"源图 {original.Width}x{original.Height}");
+Directory.CreateDirectory(assets);
+WritePng(Path.Combine(assets, "logo.png"), 1024, polished: true);
+WritePng(Path.Combine(assets, "logo-tray.png"), 256, polished: false);
+WritePng(Path.Combine(assets, "TabNest-icon.png"), 1024, polished: true);
 
-var entries = new List<(int Size, byte[] Data, bool IsPng)>();
+var entries = new List<(int Size, byte[] Data)>();
 
 foreach (var size in sizes)
 {
-    using var scaled = new Bitmap(size, size, PixelFormat.Format32bppArgb);
-
-    using (var g = Graphics.FromImage(scaled))
-    {
-        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-        g.SmoothingMode = SmoothingMode.HighQuality;
-        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        g.CompositingQuality = CompositingQuality.HighQuality;
-        g.Clear(Color.Transparent);
-        g.DrawImage(original, new Rectangle(0, 0, size, size));
-    }
-
-    // 256 用 PNG 压缩（否则光这一档就要 256KB）；其余用 DIB，
-    // 兼容性最好 —— 部分较老的 shell 路径对小尺寸 PNG 图标支持不稳。
+    using var bmp = Render(size, polished: size >= 48);
     if (size >= 256)
     {
         using var ms = new MemoryStream();
-        scaled.Save(ms, ImageFormat.Png);
-        entries.Add((size, ms.ToArray(), true));
+        bmp.Save(ms, ImageFormat.Png);
+        entries.Add((size, ms.ToArray()));
     }
     else
     {
-        entries.Add((size, ToDib(scaled), false));
+        entries.Add((size, ToDib(bmp)));
     }
 }
 
 using (var fs = File.Create(target))
 using (var w = new BinaryWriter(fs))
 {
-    w.Write((ushort)0);              // reserved
-    w.Write((ushort)1);              // type: 1 = icon
+    w.Write((ushort)0);
+    w.Write((ushort)1);
     w.Write((ushort)entries.Count);
 
     var offset = 6 + (entries.Count * 16);
 
-    foreach (var (size, data, _) in entries)
+    foreach (var (size, data) in entries)
     {
-        // 256 在 ICONDIRENTRY 里用 0 表示 —— 这个字段只有一个字节。
         w.Write((byte)(size >= 256 ? 0 : size));
         w.Write((byte)(size >= 256 ? 0 : size));
-        w.Write((byte)0);            // 调色板颜色数，32 位图为 0
-        w.Write((byte)0);            // reserved
-        w.Write((ushort)1);          // planes
-        w.Write((ushort)32);         // 位深
+        w.Write((byte)0);
+        w.Write((byte)0);
+        w.Write((ushort)1);
+        w.Write((ushort)32);
         w.Write(data.Length);
         w.Write(offset);
-
         offset += data.Length;
     }
 
-    foreach (var (_, data, _) in entries)
+    foreach (var (_, data) in entries)
     {
         w.Write(data);
     }
@@ -84,7 +73,123 @@ Console.WriteLine($"已写出 {target}");
 Console.WriteLine($"{entries.Count} 档尺寸：{string.Join(", ", entries.Select(e => e.Size))}");
 Console.WriteLine($"体积 {info.Length / 1024.0:F1} KB");
 
-// 把 32bpp 位图打包成 ICO 里的 DIB 条目。
+static void WritePng(string path, int size, bool polished)
+{
+    using var bmp = Render(size, polished);
+    bmp.Save(path, ImageFormat.Png);
+    Console.WriteLine($"源图 {size}x{size}  ← {path}");
+}
+
+static Bitmap Render(int size, bool polished)
+{
+    var bmp = new Bitmap(size, size, PixelFormat.Format32bppArgb);
+    using var g = Graphics.FromImage(bmp);
+    g.Clear(Color.Transparent);
+    g.PixelOffsetMode = PixelOffsetMode.Half;
+    g.CompositingQuality = CompositingQuality.HighQuality;
+
+    if (size <= 24)
+    {
+        g.SmoothingMode = SmoothingMode.None;
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        DrawTray(g, size);
+    }
+    else
+    {
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        DrawLarge(g, size, polished);
+    }
+
+    return bmp;
+}
+
+// 托盘档：整像素。橙底 + 加粗白 T。和托盘里绿色 N 同一套认法：色块 + 字母。
+static void DrawTray(Graphics g, int size)
+{
+    var plate = Color.FromArgb(255, 234, 88, 12);
+    using var mark = new SolidBrush(Color.White);
+
+    int r = size <= 16 ? 3 : 4;
+    FillRound(g, new Rectangle(0, 0, size, size), r, plate);
+
+    int barX, barY, barW, barH, stemX, stemY, stemW, stemH;
+    if (size <= 16)
+    {
+        barX = 3; barY = 3; barW = 10; barH = 4;
+        stemX = 6; stemY = 6; stemW = 4; stemH = 8;
+    }
+    else if (size <= 20)
+    {
+        barX = 3; barY = 4; barW = 14; barH = 5;
+        stemX = 8; stemY = 7; stemW = 5; stemH = 10;
+    }
+    else
+    {
+        barX = 4; barY = 5; barW = 16; barH = 6;
+        stemX = 9; stemY = 9; stemW = 6; stemH = 11;
+    }
+
+    g.FillRectangle(mark, barX, barY, barW, barH);
+    g.FillRectangle(mark, stemX, stemY, stemW, stemH);
+}
+
+// 32px 及以上：同一枚圆角粗 T，顶杠做成标签那样的胶囊横条。
+static void DrawLarge(Graphics g, int size, bool polished)
+{
+    var plateTop = Color.FromArgb(255, 255, 122, 26);
+    var plateBot = Color.FromArgb(255, 196, 70, 8);
+    var mark = Color.White;
+
+    float s = size;
+    float plateR = s * 0.22f;
+    var plate = new RectangleF(0, 0, s, s);
+
+    if (polished)
+    {
+        using var shadow = Rounded(new RectangleF(s * 0.04f, s * 0.06f, s * 0.92f, s * 0.90f), plateR);
+        using var sb = new SolidBrush(Color.FromArgb(40, 0, 0, 0));
+        g.FillPath(sb, shadow);
+    }
+
+    using (var path = Rounded(plate, plateR))
+    using (var brush = new LinearGradientBrush(plate, plateTop, plateBot, 90f))
+    {
+        g.FillPath(brush, path);
+    }
+
+    float barX = s * 0.17f;
+    float barY = s * 0.20f;
+    float barW = s * 0.66f;
+    float barH = s * 0.22f;
+    FillRound(g, new RectangleF(barX, barY, barW, barH), barH / 2f, mark);
+
+    float stemW = s * 0.22f;
+    float stemX = (s - stemW) / 2f;
+    float stemY = barY + barH * 0.45f;
+    float stemH = s * 0.52f;
+    FillRound(g, new RectangleF(stemX, stemY, stemW, stemH), s * 0.07f, mark);
+}
+
+static void FillRound(Graphics g, RectangleF rect, float radius, Color color)
+{
+    using var path = Rounded(rect, radius);
+    using var brush = new SolidBrush(color);
+    g.FillPath(brush, path);
+}
+
+static GraphicsPath Rounded(RectangleF r, float radius)
+{
+    var path = new GraphicsPath();
+    var d = Math.Max(0.1f, Math.Min(radius * 2f, Math.Min(r.Width, r.Height)));
+    path.AddArc(r.X, r.Y, d, d, 180, 90);
+    path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+    path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+    path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+    path.CloseFigure();
+    return path;
+}
+
 static byte[] ToDib(Bitmap bmp)
 {
     var w = bmp.Width;
@@ -93,18 +198,16 @@ static byte[] ToDib(Bitmap bmp)
     using var ms = new MemoryStream();
     using var writer = new BinaryWriter(ms);
 
-    // BITMAPINFOHEADER。高度写两倍：ICO 的 DIB 由 XOR 位图与 AND 掩码上下拼成，
-    // 这个约定不写对的话图标会只显示上半截。
-    writer.Write(40);                // biSize
+    writer.Write(40);
     writer.Write(w);
     writer.Write(h * 2);
-    writer.Write((ushort)1);         // biPlanes
-    writer.Write((ushort)32);        // biBitCount
-    writer.Write(0);                 // BI_RGB
-    writer.Write(w * h * 4);         // biSizeImage
-    writer.Write(0);                 // 分辨率
+    writer.Write((ushort)1);
+    writer.Write((ushort)32);
     writer.Write(0);
-    writer.Write(0);                 // 调色板
+    writer.Write(w * h * 4);
+    writer.Write(0);
+    writer.Write(0);
+    writer.Write(0);
     writer.Write(0);
 
     var data = bmp.LockBits(
@@ -113,8 +216,6 @@ static byte[] ToDib(Bitmap bmp)
     try
     {
         var row = new byte[w * 4];
-
-        // DIB 是自下而上存储的。
         for (var y = h - 1; y >= 0; y--)
         {
             System.Runtime.InteropServices.Marshal.Copy(
@@ -127,14 +228,27 @@ static byte[] ToDib(Bitmap bmp)
         bmp.UnlockBits(data);
     }
 
-    // AND 掩码。32 位图靠 alpha 通道决定透明，掩码全 0 即可，
-    // 但**必须写出来**：省掉它的话某些 shell 路径会把图标读成花屏。
     var maskStride = ((w + 31) / 32) * 4;
-
     for (var y = 0; y < h; y++)
     {
         writer.Write(new byte[maskStride]);
     }
 
     return ms.ToArray();
+}
+
+static string FindRepoRoot()
+{
+    var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
+    while (dir is not null)
+    {
+        if (File.Exists(Path.Combine(dir.FullName, "TabNest.slnx")))
+        {
+            return dir.FullName;
+        }
+
+        dir = dir.Parent;
+    }
+
+    return Directory.GetCurrentDirectory();
 }

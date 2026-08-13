@@ -138,6 +138,7 @@ internal sealed class LauncherWindow : Window
             "tool" => TestWindows.CreateToolWindow,
             "fixed" or "fixedsize" => TestWindows.CreateFixedSize,
             "hideonclose" or "hide" => TestWindows.CreateHideOnClose,
+            "child" or "titledchild" => TestWindows.CreateWithTitledChild,
             _ => null,
         };
 

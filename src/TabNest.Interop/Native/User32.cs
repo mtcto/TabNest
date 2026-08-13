@@ -10,6 +10,7 @@ internal static partial class User32
 
     public const uint GW_HWNDNEXT = 2;
     public const uint GW_OWNER = 4;
+    public const uint GW_CHILD = 5;
 
     [LibraryImport(Lib, SetLastError = true)]
     public static partial nint GetTopWindow(nint hWnd);

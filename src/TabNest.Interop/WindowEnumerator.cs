@@ -57,15 +57,64 @@ public sealed class WindowEnumerator(ProcessInspector processes)
             return false;
         }
 
-        var style = (long)User32.GetWindowLongPtr(hwnd, User32.GWL_STYLE);
-
-        // 子窗口不是顶层窗口。理论上 Z 序链上不该出现，但驱动或注入类软件会制造例外。
-        if ((style & User32.WS_CHILD) != 0)
+        if (!IsTopLevel(hwnd))
         {
             return false;
         }
 
         return User32.GetWindowTextLength(hwnd) > 0;
+    }
+
+    /// <summary>
+    /// 是否为真正的顶层窗口。
+    ///
+    /// 两道判据缺一不可：
+    ///
+    /// **WS_CHILD** —— 子窗口不是顶层窗口。Z 序链上理论上不该出现，
+    /// 但驱动或注入类软件会制造例外。
+    ///
+    /// **GA_ROOT 指向自己** —— 更可靠的一道。Chrome 的「Chrome Legacy Window」
+    /// 就是典型：它是渲染窗口的子窗口，无障碍接口被触发时才创建，
+    /// 有标题、可见、非工具窗，样式上也可能不带 WS_CHILD，光看样式判不出来。
+    /// 把它当成普通窗口分组，用户会莫名多出一个点不动的空白标签。
+    ///
+    /// 这个判定必须对**所有**入口生效，而不只是枚举。早期它只写在枚举的预过滤里，
+    /// 而自动分组走的是窗口事件、直接对任意 HWND 调 Describe，绕开了这道过滤 ——
+    /// 于是 Chrome Legacy Window 被自动收编进了组里。
+    /// </summary>
+    public static bool IsTopLevel(nint hwnd)
+    {
+        if (hwnd == 0)
+        {
+            return false;
+        }
+
+        var style = (long)User32.GetWindowLongPtr(hwnd, User32.GWL_STYLE);
+
+        if ((style & User32.WS_CHILD) != 0)
+        {
+            return false;
+        }
+
+        return User32.GetAncestor(hwnd, User32.GA_ROOT) == hwnd;
+    }
+
+    /// <summary>按标题查找某个窗口的直接子窗口。仅供诊断与测试使用。</summary>
+    public static nint FindChildWindow(nint parent, string title)
+    {
+        var child = User32.GetWindow(parent, User32.GW_CHILD);
+
+        while (child != 0)
+        {
+            if (ReadTitle(child).Contains(title, StringComparison.Ordinal))
+            {
+                return child;
+            }
+
+            child = User32.GetWindow(child, User32.GW_HWNDNEXT);
+        }
+
+        return 0;
     }
 
     /// <summary>
@@ -150,6 +199,20 @@ public sealed class WindowEnumerator(ProcessInspector processes)
     public WindowInfo? Describe(nint hwnd)
     {
         if (!User32.IsWindow(hwnd))
+        {
+            return null;
+        }
+
+        // 子窗口一律不描述。
+        //
+        // Describe 是所有**非枚举**路径的共同入口：拖放命中、自动分组、批量收编
+        // 都从一个 HWND 开始。枚举路径的预过滤挡不到它们，早期就是这样让
+        // Chrome 的「Chrome Legacy Window」（渲染窗口的子窗口，无障碍接口触发时创建）
+        // 被自动分组收编进了组里 —— 用户看到的是莫名多出一个点不动的空白标签。
+        //
+        // 挡在这里而不是在每个调用方各判一次：漏掉任何一处都会重现同样的问题，
+        // 而这类问题只在特定应用、特定时机下才出现，极难被测试覆盖。
+        if (!IsTopLevel(hwnd))
         {
             return null;
         }
