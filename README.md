@@ -1,30 +1,129 @@
+<div align="center">
+
+<img src="assets/logo.png" width="120" alt="TabNest logo">
+
 # TabNest
 
-把散落在 Windows 桌面上的工作窗口，收进可控、可恢复、可键盘操作的标签工作区。
+**Browser-style tabs for every Windows app — without injecting a single DLL into any of them.**
 
-> **状态：早期开发中（0.1.0）**，尚不可用于日常工作。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4.svg)](https://dotnet.microsoft.com/download)
+[![Platform](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4.svg)](#requirements)
+[![Single file](https://img.shields.io/badge/download-11.3%20MB%20single%20exe-success.svg)](#install)
+[![Injection](https://img.shields.io/badge/DLL%20injection-none-brightgreen.svg)](#why-no-injection-matters)
+
+**English** · [简体中文](README.zh-CN.md)
+
+</div>
 
 ---
 
-## 这是什么
+## What it is
 
-TabNest 把多个独立的 Windows 窗口组织成一个标签组——像浏览器标签一样切换、拖拽合并、拖出拆分，但对象是 IDE、终端、文件管理器、浏览器这些互不相干的应用窗口。
-
-它管理的是**窗口**，不修改任何应用的内容或文件。
-
-## 项目结构
+TabNest groups unrelated Windows applications into a single tabbed workspace. Drag one window onto another and they merge; a tab rail appears above them; click a tab to switch, drag one out to split it off again.
 
 ```
-src/TabNest.Core        纯领域层：组状态机、规则引擎、快照、配置。零 Win32，可 100% 单元测试
-src/TabNest.Interop     所有 P/Invoke、窗口观察、窗口控制、任务栏控制
-src/TabNest.App         常驻托盘进程、编排、标签轨道、设置中心（全部 Win32 自绘）
-tests/TabNest.Core.Tests    领域层单元测试
-tools/TabNest.Harness       窗口行为测试宿主（开发工具，不随产品发布）
+┌──────────────────────────────────────────────────────────────┐
+│  ▣ VS Code   │  ▣ Terminal   │  ▣ Chrome   │  ▣ Explorer  ✕  │  ← tab rail
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│                   the active window                          │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-## 构建与运行
+It manages **windows**, not application internals. It never reads, modifies, or transmits the content of any document, and never loads code into another process.
 
-需要 [.NET 10 SDK](https://dotnet.microsoft.com/download)（版本由 `global.json` 锁定）。不需要 Visual Studio。
+> **Status — 0.1.0, Phase 1 complete.** Grouping, switching, drag-merge/split, rules, saved workspaces, hotkeys, taskbar policies and the settings centre all work. Tabs drawn *inside* the native title bar require the Phase 2 injection layer and are not implemented yet. The binary is not code-signed, so SmartScreen will warn on first run.
+
+## Why
+
+Windows has no answer for the twelve-window workday. Alt+Tab is a flat list, the taskbar groups by application rather than by task, and Microsoft cancelled Sets in 2019. The remaining options are commercial and all of them work by loading a DLL into every process on your machine.
+
+TabNest takes the opposite bet: stay outside every other process, and pay for it with engineering rather than with the user's trust.
+
+## Highlights
+
+**Zero DLL injection.** TabNest loads no code into any other process. It observes via `SetWinEventHook` (out-of-context) and acts via ordinary window APIs. Nothing of TabNest is mapped into your browser, your IDE, or your password manager.
+
+**11.3 MB, one file, no runtime.** Trimmed, single-file, compressed, self-contained. Download it and double-click. No .NET runtime, no VC++ redistributable, no admin rights.
+
+**Measurably idle.** 0.000% CPU over a 20-second idle sample, 35 MB working set, 15 threads. There is no polling anywhere in the product; every wakeup traces back to a real window event.
+
+**Your windows are always recoverable.** A snapshot is written to disk *before* every window write. Crash it, kill it, uninstall it — windows return to their original positions and taskbar buttons are restored.
+
+**Every switch actually does something.** Each toggle in the settings centre is backed by a test asserting the behaviour changes. A switch that does nothing when clicked is worse than no switch at all.
+
+**Runs as you.** `asInvoker` manifest, no service, no elevated helper, no auto-update daemon.
+
+### Features
+
+|  | |
+|---|---|
+| **Grouping** | Drag-to-merge with configurable trigger (always / Shift / Ctrl) and delay · drag a tab out to split · hover the top of any window to reveal a merge bar · batch-adopt every window of an app or monitor in one click · auto-group windows of the same kind · lockable groups |
+| **Tabs** | Rounded or square styles · variable or fixed width · window icons · close-button policy (hover / active only / all / never) · configurable visibility including auto-hide-on-hover · light, dark, and system-following themes |
+| **Closing** | Browser semantics: close tab, close others, close left, close right, close all — with detection for apps that merely hide on close instead of exiting |
+| **Sessions** | Save a group as a workspace and restore it later · crash recovery · window state restored exactly on exit |
+| **Rules** | Allow-list or block-list of applications by executable · avoid apps that already have native tabs · a full rule engine (process + class + title matching) available via `settings.json` |
+| **Keyboard** | Global hotkeys with conflict detection — <kbd>Win</kbd>+<kbd>`</kbd> next tab, <kbd>Ctrl</kbd>+<kbd>Win</kbd>+<kbd>`</kbd> previous |
+| **Taskbar** | Show all member buttons, or only the active window's |
+| **Fullscreen** | Maximize a group and the tab rail stays visible — double-click the rail to toggle |
+
+## Comparison
+
+The only mature product in this category is **Stardock Groupy 2**. TabNest was built against it deliberately, and the numbers below were measured rather than estimated.
+
+> **Method.** Groupy 2 v2.3.1 and TabNest 0.1.0, same machine (Windows 11 26100, x64, 24 logical cores), both idle for 20 seconds with no mouse or keyboard input. Memory and handles from the process table; CPU from `TotalProcessorTime` deltas; injection count by walking the module list of every readable process. Groupy figures are the sum of its resident processes (`GroupyCtrl` + `GroupySrv` + two helpers). Full data and method: [`docs/competitive-analysis.md`](docs/competitive-analysis.md). **Your numbers will differ** — this is one machine, one configuration, one point in time.
+
+| | **TabNest 0.1.0** | Groupy 2 (v2.3.1) |
+|---|---|---|
+| License | **MIT, open source** | Commercial, closed source |
+| Price | **Free** | Paid |
+| **DLL injection into other processes** | **None** | 46 processes on the test machine |
+| Resident working set | **35.2 MB** | 78 MB |
+| Idle CPU, 20 s sample | **0.000%** | 0.08% of one core |
+| Threads | **15** | 30 |
+| Handles | **322** | 706 |
+| Download size | **11.3 MB, single exe** | 24.6 MB installer |
+| Extra runtime needed | **None** | None |
+| Background service | **None** | Yes (`GroupySrv`) |
+| Dark theme | **Yes** | No |
+| Settings search | Not yet | No |
+| Tabs drawn inside the native title bar | Not yet — Phase 2 | **Yes** |
+| Replaces Explorer / Notepad native tabs | No | **Yes** |
+| Per-document and per-folder rules | No | **Yes** |
+| Tab hover previews | No | **Yes** |
+| Code signed | Not yet | **Yes** |
+| Maturity | 0.1.0 | Shipping since 2017 |
+
+**Where Groupy is genuinely ahead:** integrated tabs, native tab replacement, document-level rules, hover previews, a signed binary, and years of compatibility work. Those first four all require running code inside the target process, which is exactly what TabNest declines to do in Phase 1. If you need tabs rendered into the real title bar today, buy Groupy — it is a good product and it earned that capability.
+
+### Why no injection matters
+
+Loading a DLL into every running process is the standard way to solve this problem, and it has real costs that never show up in a task manager row:
+
+- **Blast radius.** A bug in an injected DLL can crash the host application. One defect reaches every process it was mapped into.
+- **Hidden overhead.** 46 processes each carry the DLL image and hook dispatch. None of that is attributed to the tool's own memory or CPU.
+- **Trust surface.** Code inside your browser and password manager can read what they render. TabNest cannot, because it is not there.
+- **Antivirus and sandboxes.** Global injection is one of the most-flagged behaviours in endpoint security, and modern sandboxed processes reject it anyway.
+
+The tradeoff is honest and it is not free: staying outside means TabNest cannot draw into a window's real title bar, and focus transfer is constrained by Windows' foreground lock (see [Known limitations](#known-limitations)).
+
+## Install
+
+Download `TabNest.exe` from [Releases](../../releases) and run it. That is the whole procedure — it is a single self-contained executable that needs no runtime and no administrator rights.
+
+An optional installer adds a Start-menu entry, a launch-at-login option, and clean uninstall. Settings and saved groups live in `%LOCALAPPDATA%\TabNest\` and survive uninstall.
+
+Because the binary is not yet code-signed, SmartScreen will show *"Windows protected your PC"* on first run — choose **More info → Run anyway**. Code signing is planned; see [Roadmap](#roadmap).
+
+### Requirements
+
+Windows 10 version 2004 (build 19041) or later, x64 or ARM64. The Desktop Window Manager must be enabled, and *"Show window contents while dragging"* must be on — TabNest checks both and tells you if they are off.
+
+## Build from source
+
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download) (version pinned by `global.json`). Visual Studio is not required.
 
 ```bash
 dotnet build
@@ -34,117 +133,91 @@ dotnet build
 dotnet test
 ```
 
-无 UI 诊断模式，列出当前窗口及其可分组性判定原因：
+Produce the shippable single-file binary:
+
+```bash
+dotnet publish src/TabNest.App -c Release -r win-x64 -o publish/v1 --self-contained true -p:PublishTrimmed=true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true
+```
+
+### Diagnostics and test modes
+
+TabNest ships with headless modes that need no GUI harness:
 
 ```bash
 dotnet run --project src/TabNest.App -- --diagnose
 ```
 
-三个集成测试都需要先启动测试宿主：
+| Mode | What it does |
+|---|---|
+| `--diagnose` | Lists every window and explains, in plain language, why it can or cannot be grouped |
+| `--benchmark` | Measures memory, threads, handles, idle CPU and latency against the targets above; non-zero exit if any regress |
+| `--watch` | Live trace of the drag-and-drop hit-testing chain |
+| `--selftest` | Group → switch → split → restore round trip, with switch latency |
+| `--grouptest` | Same, but through the **production** orchestration path |
+| `--railtest` | Verifies the tab rail is visible, correctly positioned, and unoccluded |
+| `--settingstest` | Checks the settings centre's layout, hit-testing and write-back wiring |
+| `--quirktest` | Regression suite for windows that misbehave (see below) |
+| `--stresstest` | Event storms and handle-leak detection |
+
+The integration modes need the test harness running:
 
 ```bash
-dotnet run --project tools/TabNest.Harness -- --spawn normal,normal
+dotnet run --project tools/TabNest.Harness -- --spawn normal,stubborn,fixed,hideonclose
 ```
 
-`--selftest` 跑完「分组 → 切换 → 拆分 → 还原」闭环并测量切换延迟；
-`--grouptest` 走**生产代码路径**验证编排层建组与分组栏显示；
-`--railtest` 单独验证分组栏可见、位置正确、在成员窗口之上、未被遮挡。
+The harness deliberately spawns *badly behaved* windows, because well-behaved ones prove nothing. `stubborn` mimics Chromium — it forces its maximized rectangle back in `WM_WINDOWPOSCHANGING`, exactly like Electron apps do. `hideonclose` hides instead of exiting. `fixed` clamps its own size. Each one exists because it caught a real bug that a plain WPF window happily passed.
 
-```bash
-dotnet run --project src/TabNest.App -- --grouptest
+## Architecture
+
+```
+src/TabNest.Core      Pure domain: group state machine, rule engine, snapshots, config.
+                      Zero Win32. 100% unit-testable.
+src/TabNest.Interop   Every P/Invoke, window observation, window control, taskbar control.
+src/TabNest.App       Tray process, orchestration, tab rail, settings centre.
+                      All Win32 + GDI/GDI+ self-drawn — no WPF anywhere.
+tests/                Domain unit tests (196).
+tools/TabNest.Harness Misbehaving-window test host. Not shipped.
 ```
 
-这三层缺一不可：曾经出现过 `--selftest` 与 `--railtest` 双绿、但产品实际完全不可用的情况 ——
-问题正好藏在两者中间那段没人覆盖的编排代码里。
+Three rules hold the design together:
 
-实时观察拖放判定链路：
+**The domain layer never touches a window.** `GroupSessionManager` is a pure state machine that emits `WindowAction` instructions; `WindowController` executes them on a single serial queue. Group logic is therefore fully testable with no windows on screen.
 
-```bash
-dotnet run --project src/TabNest.App -- --watch
-```
+**No WPF, anywhere.** WPF cannot be trimmed (`PublishTrimmed` fails with `NETSDK1168`) and cannot be NativeAOT-compiled. Keeping it would mean a 135 MB self-contained build or forcing a runtime install. Dropping it gave an 11.3 MB zero-dependency executable. `--benchmark` asserts `PresentationFramework` is never loaded.
 
-## 设计约束
+**Every cross-process synchronous message carries a timeout.** All of them go through `SendMessageTimeoutW`, preceded by an `IsHungAppWindow` check. A frozen target application must never freeze TabNest.
 
-这几条不是风格偏好，是硬性约束，违反了会直接损害产品：
+Longer engineering notes — including the failures that produced these rules — are in [`docs/development.md`](docs/development.md).
 
-**整个产品不使用 WPF。** 托盘、窗口观察、标签轨道与设置中心全部走 Win32 + GDI/GDI+ 自绘。
-WPF 不支持裁剪（启用 `PublishTrimmed` 时 SDK 直接报 `NETSDK1168` 拒绝构建）也不支持 NativeAOT，
-保留它意味着自包含发布 135MB 或强制用户装运行时；摘掉后是 11MB 零依赖。
-`PresentationFramework` 是否被加载由 `--benchmark` 自动校验。
+## Known limitations
 
-**设置项必须真的生效。** 每一个出现在设置中心的开关都要有对应的行为改变，并由
-`SettingsEffectTests` 断言"改了设置，输出确实不同"。曾经有 12 个开关能切换、能落盘、能命中，
-点了却毫无效果——而当时三层测试全绿，因为它们验证的都是"能切换/能保存/能命中"，
-没有一个验证"切换之后行为真的变了"。**一个点了没反应的开关比没有这个开关更糟。**
+**Focus transfer degrades when TabNest has no foreground rights.** Code injected into a target process inherits its foreground privilege; TabNest, running outside, is subject to Windows' foreground lock. When you click a tab, TabNest received the last input event and qualifies, so focus moves normally. Without user input — a scripted call, for instance — a four-stage fallback chain ends at *raise without focus*: the window comes to the front, but the keyboard caret stays where it was. This is degradation, not failure, and `--selftest` reports the two outcomes separately.
 
-**所有 P/Invoke 集中在 `TabNest.Interop.Native`。** 其他项目不得声明 `[LibraryImport]`。
+**The tab rail is a separate window, so it can lag by a frame.** Groupy's rail is seamless because it is drawn by injected code inside the window's own title bar. TabNest's rail follows the target window from outside, which is structurally always one frame behind during fast drags. It overlaps the window's top corners to hide the seam. A true fix needs the Phase 2 injection layer.
 
-**领域逻辑不碰窗口。** `GroupSessionManager` 是纯状态机，只产出 `WindowAction` 指令，由 `WindowController` 在单一串行队列上执行。这让组逻辑可以在无窗口环境下完整测试。
+**The rules UI is an application list, not a rule editor.** The Rules page is a list of executables plus an *"only allow these apps"* checkbox — block-list when unchecked, allow-list when checked. The full rule engine (process + window class + title, partial matching, sub-rules, priority) works but must be configured by hand in `settings.json`. Making everyone face a multi-field form to serve a handful of complex cases puts the cost in the wrong place; hand-written rules are never overwritten by the UI and the page tells you they exist.
 
-**任何跨进程同步消息必须带超时。** 统一走 `SendMessageTimeoutW`，操作前用 `IsHungAppWindow` 预检。目标程序假死不得拖垮 TabNest。
+**Group fullscreen uses "fake maximize".** Chromium-based apps force their rectangle back to the full work area while maximized, so a genuinely maximized window cannot give up the strip the tab rail needs. TabNest instead restores the window and sizes it to the work area minus the rail. It looks identical, but Windows does not consider the window maximized, which affects the maximize button glyph and Snap Layouts.
 
-**窗口状态必须可还原。** 每次窗口写操作之前先落盘快照。TabNest 崩溃、强杀、卸载都不得留下位置错乱或隐藏的窗口。
+**Not implemented:** integrated tabs and native tab replacement (both need Phase 2), a hotkey rebinding UI (hotkeys are viewable and can be switched off; rebinding needs `settings.json`), and code signing.
 
-## 性能
+## Roadmap
 
-对标本机实测的 Stardock Groupy 2（v2.3.1）。全部指标由 `--benchmark` 自动测量，不达标即退出码非零：
+**Phase 1 — complete.** Pure C#, no injection into any process. Grouping, switching, drag merge and split, rules, workspaces, taskbar button policies, hover merge bar, batch adoption, group fullscreen. Tabs are drawn on a rail above the window.
 
-```bash
-TabNest.exe --benchmark
-```
+**Phase 2 — planned.** A native C++ layer that renders tabs into the target window's own title bar, replaces Explorer and Notepad native tabs, and proxies <kbd>Ctrl</kbd>+<kbd>T</kbd>/<kbd>N</kbd>. It will be **opt-in**: Phase 1's external mode stays the default and stays supported, and the domain logic is shared unchanged between them.
 
-| 指标 | Groupy 2 | 阶段一目标 | **TabNest 实测** |
-|---|---:|---:|---:|
-| 常驻工作集 | 78 MB | ≤ 85 MB | **35.2 MB** |
-| 空闲 CPU（20s 采样） | 0.08% 单核 | ≤ 0.10% | **0.000%** |
-| 线程数 | 30 | ≤ 24 | **15** |
-| 句柄数 | 706 | ≤ 400 | **322** |
-| 事件→UI 延迟 P95 | 未测 | ≤ 120 ms | **16 ms** |
-| 发布体积 | 24.6 MB | — | **11.1 MB** |
-| 需额外安装运行时 | 否 | 否 | **否** |
-| 注入宿主进程数 | 46 | 0 | **0** |
+Phase 2 is bound by three non-negotiable rules: rendering and hit-testing must be fully self-contained inside the host process; the host's UI thread must never be blocked; and the injected layer must never read or transmit the target's memory, documents, or input.
 
-空闲 CPU 能压到零，靠的是两点：`WinEvent` 钩子被动投递、全程无轮询；以及位置变化事件只跟踪组成员，
-不理会全系统的窗口移动——后者不做过滤时实测会把空闲 CPU 推到 0.5% 单核以上。
+## Contributing
 
-`--benchmark` 测量的是**真实的常驻进程**而非门禁自身。早期版本在门禁进程内自测，
-空闲 CPU 报 0.16~0.23%，而同一份代码作为常驻进程跑时是 0.000%——差值全是采样循环
-自己烧的。把自己的开销算进被测对象的门禁，会逼着人去优化根本不存在的问题。
+Issues and pull requests are welcome. Two expectations specific to this project:
 
-Groupy 基准的采集方式与原始数据见 [`docs/competitive-analysis.md`](docs/competitive-analysis.md)。
+1. **A regression test must be observed failing before the fix lands.** Not "should fail" — actually run it against the unfixed code and confirm it goes red. This project has caught three tests that asserted nothing and one revert that silently didn't apply.
+2. **Reproduce misbehaving windows in the harness first.** If an app breaks TabNest, add a window kind to `tools/TabNest.Harness` that reproduces the behaviour, then fix it. A test host full of well-behaved windows is a test host that proves nothing.
 
-## 已知限制
-
-**焦点转移在无前台权限时会降级。** Groupy 的代码注入在目标进程内，天然持有前台窗口权限；
-TabNest 在进程外，受 Windows 前台锁定机制约束。用户点击标签时我们的进程收到了最后一次输入事件，
-按规则即获得前台权限，此时焦点能正常转移；但在没有用户输入的场景（如脚本调用）下，
-四级降级链会退到"仅置顶"——窗口可见并置于最前，键盘焦点仍在别处。
-这是降级而非失败，`--selftest` 会如实区分这两种结果。
-
-**分组栏无法做到与窗口浑然一体。** Groupy 的标签栏之所以毫无缝隙，是因为它把 DLL 注入目标进程，
-直接在窗口自己的标题栏上绘制——那条标签栏就是窗口的一部分。TabNest 阶段一的分组栏是独立窗口，
-只能靠代码追随目标窗口的位置与尺寸，原理上必然有一帧延迟。目前的做法是让分组栏向下覆盖窗口顶部
-圆角区域来消除视觉接缝，但快速拖动时仍可能看到轻微滞后。彻底解决需要阶段二的注入层。
-
-**界面上只有应用清单，没有完整的规则编辑器。** 分组规则页是一份应用列表加一个
-「仅允许指定应用在组中」复选框：不勾时它是阻止清单，勾上时是允许清单。
-
-完整的规则引擎（进程 + 窗口类 + 标题的组合匹配、部分匹配、多条件、优先级）照常可用，
-但只能在 `settings.json` 里手工配置。为了覆盖少数复杂场景而让所有人面对一张多字段表单，
-是把成本摊错了地方——绝大多数人想做的只是"这个应用别参与分组"。手工规则不会被应用清单
-接管，页面上会提示它们的存在。
-
-**尚未实现**：集成标签与原生标签替换（均需阶段二注入层）、热键重绑界面（热键可在设置页查看、
-可整体开关，改绑需编辑 `settings.json`）、代码签名。
-
-## 路线
-
-**阶段一（当前）** 纯 C#，不注入任何进程。覆盖分组、切换、拖拽合并与拆分、规则、工作区、任务栏按钮策略、悬停分组条、批量收编。标签显示为贴在窗口上方的轨道。
-
-**阶段二** 引入原生 C++ 注入层，实现标签集成进目标窗口标题栏等需要进程内渲染的能力。
-
-阶段一与阶段二的领域逻辑完全共用。
-
-## 许可
+## License
 
 [MIT](LICENSE)
+
+TabNest is an independent project. It is not affiliated with, endorsed by, or derived from Stardock Corporation or any other vendor mentioned here. Product names are trademarks of their respective owners; the comparison above reflects black-box measurement of a legally obtained copy on the author's own machine.
