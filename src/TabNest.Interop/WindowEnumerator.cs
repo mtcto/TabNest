@@ -323,6 +323,15 @@ public sealed class WindowEnumerator(ProcessInspector processes)
     /// <summary>窗口是否最大化。分组栏的「最大化时隐藏」策略据此判断。</summary>
     public static bool IsMaximized(nint hwnd) => hwnd != 0 && User32.IsZoomed(hwnd);
 
+    /// <summary>把窗口最大化。供诊断与测试模拟用户双击标题栏。</summary>
+    public static void Maximize(nint hwnd)
+    {
+        if (hwnd != 0)
+        {
+            User32.ShowWindow(hwnd, User32.SW_SHOWMAXIMIZED);
+        }
+    }
+
     /// <summary>
     /// 窗口是否仍被它自己的应用"展示着"。
     ///

@@ -62,6 +62,8 @@ internal static class QuirkTestCommand
         using var dispatcher = new UiDispatcher();
         using var orchestrator = new Orchestrator(dispatcher);
 
+        failures += TestMaximizedGroup(orchestrator, windows);
+        Console.WriteLine();
         failures += TestTitledChildWindow(enumerator);
         Console.WriteLine();
         failures += TestFixedSizeMember(orchestrator, normal, fixedSize);
@@ -77,6 +79,94 @@ internal static class QuirkTestCommand
         Console.WriteLine(failures == 0 ? "全部通过。" : $"{failures} 项未通过。");
 
         return failures == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// 最大化之后分组栏必须仍然可见。
+    ///
+    /// 最大化的窗口铺满整个工作区，而分组栏挂在窗口上方 —— 不做处理的话
+    /// 它的纵坐标变成负数、跑到屏幕外，用户看到的就是"一全屏标签就没了"。
+    /// </summary>
+    private static int TestMaximizedGroup(Orchestrator orchestrator, List<WindowInfo> harnessWindows)
+    {
+        Console.WriteLine("── 全屏后分组栏仍然可见 ──");
+
+        var failures = 0;
+
+        var normals = harnessWindows
+            .Where(w => w.Title.Contains("普通窗口", StringComparison.Ordinal))
+            .ToList();
+
+        if (normals.Count < 2)
+        {
+            Console.WriteLine("[跳过] 需要两个「普通窗口」测试窗口。");
+            return failures;
+        }
+
+        orchestrator.MergeForTest(normals[1].Identity.Handle, normals[0].Identity.Handle);
+        PumpMessages(TimeSpan.FromSeconds(2));
+
+        var group = orchestrator.GroupsForTest.FirstOrDefault();
+
+        failures += Check("已建组", group is not null, "没有建出组");
+
+        if (group is null)
+        {
+            return failures;
+        }
+
+        // 把活动成员最大化，模拟用户双击标题栏。
+        var active = group.ActiveTab?.Identity.Handle ?? 0;
+        orchestrator.MaximizeForTest(active);
+        PumpMessages(TimeSpan.FromSeconds(2));
+
+        var maximized = orchestrator.GroupsForTest.FirstOrDefault();
+        var rail = maximized is null ? null : orchestrator.GetRailForTest(maximized.Id);
+
+        failures += Check(
+            "最大化后组仍然存在",
+            maximized is not null,
+            "组在最大化后消失了");
+
+        if (maximized is null || rail is null)
+        {
+            failures += Check("最大化后分组栏仍然存在", false, "分组栏不见了");
+            orchestrator.DissolveEverything();
+            PumpMessages(TimeSpan.FromMilliseconds(600));
+            return failures;
+        }
+
+        var bounds = rail.ActualBounds;
+        var workArea = MonitorLookup.ForWindow(active).WorkArea;
+
+        Console.WriteLine($"工作区 {workArea}，分组栏 {bounds}");
+
+        failures += Check(
+            "分组栏没有被挤出屏幕上方",
+            bounds.Top >= workArea.Top - 2,
+            $"分组栏顶边 {bounds.Top}，工作区顶边 {workArea.Top} —— 已跑到屏幕外");
+
+        failures += Check(
+            "分组栏仍然可见",
+            rail.IsVisible,
+            "分组栏在最大化后被隐藏了");
+
+        failures += Check(
+            "窗口仍保持最大化状态",
+            WindowEnumerator.IsMaximized(active),
+            "为让位给分组栏而取消了最大化 —— 双击还原与最大化按钮的语义都会丢失");
+
+        var windowBounds = WindowEnumerator.ReadVisibleBounds(active);
+
+        failures += Check(
+            "窗口为分组栏让出了顶部空间",
+            windowBounds.Top >= bounds.Bottom - 2,
+            $"窗口顶边 {windowBounds.Top} 高于分组栏底边 {bounds.Bottom}，分组栏被盖住了");
+
+        orchestrator.DissolveEverything();
+        PumpMessages(TimeSpan.FromMilliseconds(800));
+
+        return failures;
     }
 
     /// <summary>

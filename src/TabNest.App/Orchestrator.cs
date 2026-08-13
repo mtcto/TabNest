@@ -383,7 +383,7 @@ internal sealed class Orchestrator : IDisposable
                 return;
             }
 
-            var lifted = WindowEnumerator.ReadVisibleBounds(memberHandle);
+            var lifted = ResolveMemberBounds(memberHandle);
             if (lifted.IsEmpty || Near(lifted, group.Bounds, tolerance: 2))
             {
                 return;
@@ -423,8 +423,22 @@ internal sealed class Orchestrator : IDisposable
         // 而从外部完全看不出是哪一步。只在超过阈值时才记录，正常拖动不产生日志。
         var watch = Stopwatch.StartNew();
 
-        var bounds = WindowEnumerator.ReadVisibleBounds(memberHandle);
+        var bounds = ResolveMemberBounds(memberHandle);
         var afterRead = watch.ElapsedMilliseconds;
+
+        // 最大化的成员也要被"对齐"到让位后的矩形 —— 它自己会铺满整个工作区，
+        // 不推它一把，分组栏就被压到屏幕外了。这是唯一需要对齐**发起者本身**的场合。
+        if (WindowEnumerator.IsMaximized(memberHandle)
+            && !Near(WindowEnumerator.ReadVisibleBounds(memberHandle), bounds, tolerance: 2))
+        {
+            var identity = FindTabByHandle(group, memberHandle)?.Identity;
+
+            if (identity is { } id)
+            {
+                _ = _controller.ExecuteAsync(
+                    new Core.Grouping.AlignWindowAction(id, bounds, KeepMaximized: true));
+            }
+        }
 
         // 容忍一两像素的抖动，否则会陷入"对齐 → 触发事件 → 再对齐"的自激循环。
         if (bounds.IsEmpty || Near(bounds, group.Bounds, tolerance: 2))
@@ -495,6 +509,38 @@ internal sealed class Orchestrator : IDisposable
         var afterQueue = watch.ElapsedMilliseconds;
         RefreshRail(updated);
         ReportSlowFrame(watch, afterRead, afterQueue, watch.ElapsedMilliseconds);
+    }
+
+    /// <summary>
+    /// 取一个成员窗口应当作为组矩形的边界。
+    ///
+    /// 普通情况就是它的可见边框。**最大化时不能照抄窗口矩形** ——
+    /// 最大化窗口铺满整个工作区，而分组栏挂在窗口上方，坐标会变成负数、跑到屏幕外，
+    /// 用户看到的就是"一全屏标签就没了"。
+    ///
+    /// 因此最大化时以**显示器工作区**为准，从顶部切出分组栏的高度。
+    /// 必须从工作区推算而不是从窗口当前矩形：后者已经是我们让位之后的结果，
+    /// 拿它再减一次会一轮轮往下缩。
+    /// </summary>
+    private static PixelRect ResolveMemberBounds(nint hwnd)
+    {
+        if (!WindowEnumerator.IsMaximized(hwnd))
+        {
+            return WindowEnumerator.ReadVisibleBounds(hwnd);
+        }
+
+        var workArea = MonitorLookup.ForWindow(hwnd).WorkArea;
+
+        if (workArea.IsEmpty)
+        {
+            return WindowEnumerator.ReadVisibleBounds(hwnd);
+        }
+
+        var dpi = MonitorLookup.DpiForWindow(hwnd);
+        var railHeight = new RailMetrics().ScaleTo(dpi).Height;
+
+        return new PixelRect(
+            workArea.Left, workArea.Top + railHeight, workArea.Right, workArea.Bottom);
     }
 
     private const long SlowFrameThresholdMs = 40;
@@ -1050,6 +1096,15 @@ internal sealed class Orchestrator : IDisposable
 
     /// <summary>测试入口：模拟某个成员上报了位置变化。</summary>
     internal void NotifyLocationForTest(nint hwnd) => OnLocationChanged(hwnd);
+
+    /// <summary>测试入口：把窗口最大化，模拟用户双击标题栏。</summary>
+    internal void MaximizeForTest(nint hwnd)
+    {
+        WindowEnumerator.Maximize(hwnd);
+
+        // 最大化会触发位置事件，但测试里不跑事件循环，直接走同一条处理路径。
+        OnLocationChanged(hwnd);
+    }
 
     /// <summary>测试入口：把指定窗口切到前台，供依赖前台判定的路径测试。</summary>
     internal void ActivateForTest(nint hwnd) =>
