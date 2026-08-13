@@ -330,6 +330,27 @@ internal static class QuirkTestCommand
             enumerator.Describe(child) is null,
             "Describe 仍然为子窗口返回了描述 —— 自动分组会把它收编进组里");
 
+        // 绝不给子窗口造任务栏按钮。
+        //
+        // ITaskbarList::AddTab 对一个本来没有按钮的窗口不是无操作，而是**造一个**。
+        // 用户曾在 Chrome 图标下多出一个 "Chrome Legacy Window" 条目，点进去什么都没有 ——
+        // 它不属于任何分组，既关不掉也看不出来源。
+        //
+        // 这里绕过 Describe 直接对裸句柄下指令，模拟"上层某条路径把不该管的窗口传下来"
+        // 以及"隐藏过的句柄被回收复用"这两种情况 —— 拦截必须发生在执行层，
+        // 因为那是唯一的收口。
+        using var controller = new WindowController();
+
+        var refused = controller
+            .ExecuteAsync(new Core.Grouping.SetTaskbarButtonAction(
+                new WindowIdentity(child, 0, 0), Visible: true))
+            .GetAwaiter().GetResult();
+
+        failures += Check(
+            "拒绝为子窗口创建任务栏按钮",
+            refused.Count > 0 && !refused[0].Success,
+            "执行层接受了为子窗口创建任务栏按钮 —— 用户会多出一个点不动的幽灵条目");
+
         return failures;
     }
 

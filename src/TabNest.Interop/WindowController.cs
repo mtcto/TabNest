@@ -542,7 +542,16 @@ public sealed class WindowController : IDisposable
     {
         // 拿不到 ITaskbarList 时降级为"保留所有按钮"，不算失败 ——
         // 任务栏按钮策略是增强功能，不该让整条指令链中断。
-        _taskbar.SetVisible(hwnd, visible);
+        var applied = _taskbar.SetVisible(hwnd, visible);
+
+        // 但"拒绝给不该有按钮的窗口造按钮"必须如实上报。
+        // 静默吞掉的话，这条不变量就没有任何测试抓手 ——
+        // 而它一旦破防，用户会多出一个点进去什么都没有、又找不到来源的幽灵条目。
+        if (!applied && visible && !TaskbarButtonController.CanOwnTaskbarButton(hwnd))
+        {
+            return OperationResult.Fail("该窗口不该拥有任务栏按钮，已拒绝为它创建。");
+        }
+
         return Done(ActivationLevel.NotAttempted, stopwatch);
     }
 
