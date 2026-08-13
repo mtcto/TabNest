@@ -25,16 +25,13 @@ public sealed record ActivateWindowAction(WindowIdentity Target) : WindowAction(
 /// 刻意不用隐藏或最小化 —— <c>SW_HIDE</c> 会让模态对话框丢失且崩溃后难以找回，
 /// 最小化则带动画，无法满足 100ms 的切换延迟目标。
 /// </summary>
-/// <param name="KeepMaximized">
-/// 保持窗口的最大化状态。
-///
-/// 默认对齐会先取消最大化，否则窗口移不动。但「分组全屏」需要窗口**保持**最大化
-/// 同时让出分组栏的高度：实测最大化窗口可以就地重定位并保持 IsZoomed，
-/// 这样双击标题栏照常还原、最大化按钮状态也正确。
-/// 取消最大化再摆一个同样大的矩形则会丢掉这些语义。
-/// </param>
+/// 对齐总是先取消最大化。曾经有过一个 <c>KeepMaximized</c> 选项，想让「分组全屏」
+/// 保持窗口最大化、只让出分组栏的高度，实测已证伪：Chromium 系应用
+/// （窗口类 Chrome_WidgetWin_1）在最大化状态下会把矩形强行改回整个工作区，
+/// SetWindowPos 返回成功而窗口立刻弹回。分组全屏改由编排层做「假最大化」。
+/// </summary>
 public sealed record AlignWindowAction(
-    WindowIdentity Target, PixelRect Bounds, bool KeepMaximized = false) : WindowAction(Target);
+    WindowIdentity Target, PixelRect Bounds) : WindowAction(Target);
 
 /// <summary>把窗口压到组内其他成员之后，但不改变焦点。用于切换时让出位置。</summary>
 public sealed record LowerWindowAction(WindowIdentity Target) : WindowAction(Target);

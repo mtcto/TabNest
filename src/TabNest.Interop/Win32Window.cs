@@ -364,6 +364,9 @@ public abstract class Win32Window : IDisposable
         public const uint MouseLeave = WindowClass.WM_MOUSELEAVE;
         public const uint LeftButtonDown = WindowClass.WM_LBUTTONDOWN;
         public const uint LeftButtonUp = WindowClass.WM_LBUTTONUP;
+
+        /// <summary>双击。窗口类必须带 CS_DBLCLKS 才会收到，我们默认带上了。</summary>
+        public const uint LeftButtonDoubleClick = WindowClass.WM_LBUTTONDBLCLK;
         public const uint CaptureChanged = WindowClass.WM_CAPTURECHANGED;
         public const uint MiddleButtonUp = WindowClass.WM_MBUTTONUP;
         public const uint RightButtonUp = WindowClass.WM_RBUTTONUP;

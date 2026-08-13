@@ -166,6 +166,109 @@ internal static partial class TestWindows
     }
 
     /// <summary>
+    /// 最大化时拒绝被重定位的窗口 —— 模仿 Chromium。
+    ///
+    /// Chromium 系应用（Electron 外壳的 Claude / VS Code / Slack、Chrome 本身，
+    /// 窗口类都是 Chrome_WidgetWin_1）在最大化状态下会于 WM_WINDOWPOSCHANGING
+    /// 里把矩形强行改回整个工作区：SetWindowPos 返回成功，窗口却立刻弹回。
+    ///
+    /// 这个窗口的存在是一次教训的固化。「全屏后分组栏仍然可见」曾经用普通 WPF 窗口
+    /// 测得全绿，而用户一在真实应用上试就发现分组栏被完全盖住 ——
+    /// 因为 WPF 窗口老老实实接受重定位，真实应用不接受。
+    /// 测试宿主里的窗口有多听话，测试就有多没用。
+    /// </summary>
+    public static Window CreateStubbornMaximize()
+    {
+        var window = Decorate(
+            new Window(),
+            "拒绝重定位",
+            Brushes.MediumVioletRed,
+            "模仿 Chromium：最大化时把自己钉死在整个工作区。\n"
+            + "分组全屏必须先把它变回普通窗口再铺满，否则分组栏会被完全盖住。");
+
+        window.SourceInitialized += (_, _) =>
+        {
+            var handle = new WindowInteropHelper(window).Handle;
+
+            if (handle == 0)
+            {
+                return;
+            }
+
+            HwndSource.FromHwnd(handle)?.AddHook(StubbornHook);
+        };
+
+        return window;
+    }
+
+    private const int WM_WINDOWPOSCHANGING = 0x0046;
+    private const uint MONITOR_DEFAULTTONEAREST = 2;
+
+    private static nint StubbornHook(
+        nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+    {
+        if (msg != WM_WINDOWPOSCHANGING || !IsZoomed(hwnd))
+        {
+            return 0;
+        }
+
+        var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+
+        if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), ref mi))
+        {
+            return 0;
+        }
+
+        // 把请求的位置原地改写回整个工作区，正是 Chromium 的做法：
+        // 调用方拿到的是成功，窗口却纹丝不动。
+        var pos = Marshal.PtrToStructure<WINDOWPOS>(lParam);
+
+        pos.x = mi.rcWork.Left;
+        pos.y = mi.rcWork.Top;
+        pos.cx = mi.rcWork.Right - mi.rcWork.Left;
+        pos.cy = mi.rcWork.Bottom - mi.rcWork.Top;
+
+        Marshal.StructureToPtr(pos, lParam, fDeleteOld: false);
+
+        return 0;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WINDOWPOS
+    {
+        public nint hwnd;
+        public nint hwndInsertAfter;
+        public int x, y, cx, cy;
+        public uint flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool IsZoomed(nint hwnd);
+
+    [LibraryImport("user32.dll")]
+    private static partial nint MonitorFromWindow(nint hwnd, uint flags);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetMonitorInfoW(nint monitor, ref MONITORINFO info);
+
+    /// <summary>
     /// 关闭时只隐藏、不销毁的窗口。
     ///
     /// 复现另一类真实缺陷：Electron 应用（Claude、Codex、VS Code）关闭窗口时

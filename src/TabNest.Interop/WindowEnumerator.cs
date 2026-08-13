@@ -332,6 +332,15 @@ public sealed class WindowEnumerator(ProcessInspector processes)
         }
     }
 
+    /// <summary>把最大化的窗口还原回最大化之前的位置与大小。</summary>
+    public static void Unmaximize(nint hwnd)
+    {
+        if (hwnd != 0)
+        {
+            User32.ShowWindow(hwnd, User32.SW_RESTORE);
+        }
+    }
+
     /// <summary>
     /// 窗口是否仍被它自己的应用"展示着"。
     ///

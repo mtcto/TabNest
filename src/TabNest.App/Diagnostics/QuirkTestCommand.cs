@@ -86,6 +86,11 @@ internal static class QuirkTestCommand
     ///
     /// 最大化的窗口铺满整个工作区，而分组栏挂在窗口上方 —— 不做处理的话
     /// 它的纵坐标变成负数、跑到屏幕外，用户看到的就是"一全屏标签就没了"。
+    ///
+    /// **必须拿「拒绝重定位」窗口当活动成员来测。** 这条测试曾经用两个普通 WPF
+    /// 窗口跑得全绿，而功能在真实应用上完全失效：普通窗口接受"保持最大化再让位"，
+    /// Chromium 系应用会把矩形强行改回工作区，当场弹回。用听话的窗口测，
+    /// 测的只是我们自己的假设。
     /// </summary>
     private static int TestMaximizedGroup(Orchestrator orchestrator, List<WindowInfo> harnessWindows)
     {
@@ -93,17 +98,24 @@ internal static class QuirkTestCommand
 
         var failures = 0;
 
+        var stubborn = harnessWindows
+            .Find(w => w.Title.Contains("拒绝重定位", StringComparison.Ordinal));
+
         var normals = harnessWindows
             .Where(w => w.Title.Contains("普通窗口", StringComparison.Ordinal))
             .ToList();
 
-        if (normals.Count < 2)
+        if (stubborn is null || normals.Count < 1)
         {
-            Console.WriteLine("[跳过] 需要两个「普通窗口」测试窗口。");
+            Console.WriteLine(
+                "[跳过] 需要一个「拒绝重定位」窗口和一个「普通窗口」。请运行：\n"
+                + "       TabNest.Harness.exe --spawn normal,stubborn");
             return failures;
         }
 
-        orchestrator.MergeForTest(normals[1].Identity.Handle, normals[0].Identity.Handle);
+        // 让「拒绝重定位」成为被拖去合并的那个，它会成为活动成员，
+        // 也就是下面真正被最大化、必须让出分组栏位置的窗口。
+        orchestrator.MergeForTest(stubborn.Identity.Handle, normals[0].Identity.Handle);
         PumpMessages(TimeSpan.FromSeconds(2));
 
         var group = orchestrator.GroupsForTest.FirstOrDefault();
@@ -117,6 +129,7 @@ internal static class QuirkTestCommand
 
         // 把活动成员最大化，模拟用户双击标题栏。
         var active = group.ActiveTab?.Identity.Handle ?? 0;
+        var beforeFullscreen = WindowEnumerator.ReadVisibleBounds(active);
         orchestrator.MaximizeForTest(active);
         PumpMessages(TimeSpan.FromSeconds(2));
 
@@ -151,17 +164,100 @@ internal static class QuirkTestCommand
             rail.IsVisible,
             "分组栏在最大化后被隐藏了");
 
+        // 先确认"真的进入了全屏"，再谈让位。
+        //
+        // 少了这一条，功能彻底失效（窗口压根没变大）时下面的让位断言反而全过 ——
+        // 一个没铺开的小窗口当然盖不住分组栏。测坏东西的前提是它先真的做了事。
         failures += Check(
-            "窗口仍保持最大化状态",
-            WindowEnumerator.IsMaximized(active),
-            "为让位给分组栏而取消了最大化 —— 双击还原与最大化按钮的语义都会丢失");
+            "整组确实铺满了屏幕",
+            WindowEnumerator.ReadVisibleBounds(active).Width >= workArea.Width - 4,
+            $"窗口 {WindowEnumerator.ReadVisibleBounds(active)}，工作区宽 {workArea.Width}");
 
+        // 刻意**不**断言窗口仍处于最大化。
+        //
+        // 分组全屏走的是"假最大化"：还原成普通窗口再手动铺满让位后的矩形。
+        // 真最大化在 Chromium 系应用上根本让不出位置（矩形被强行改回工作区），
+        // 所以 IsZoomed 为 false 是这个设计的正常结果，不是缺陷。
         var windowBounds = WindowEnumerator.ReadVisibleBounds(active);
 
+        // 同样以工作区顶边加分组栏高度为基准，不用分组栏底边 ——
+        // 分组栏一旦被顶出屏幕，底边就是 0，拿它作基准这条断言恒真。
         failures += Check(
             "窗口为分组栏让出了顶部空间",
-            windowBounds.Top >= bounds.Bottom - 2,
-            $"窗口顶边 {windowBounds.Top} 高于分组栏底边 {bounds.Bottom}，分组栏被盖住了");
+            windowBounds.Top >= workArea.Top + bounds.Height - 2,
+            $"窗口顶边 {windowBounds.Top}，应不小于 {workArea.Top + bounds.Height} —— 分组栏被盖住了");
+
+        // 全屏与否一律以**几何**判定，不看 IsZoomed。
+        //
+        // 假最大化下窗口在系统眼里始终是普通窗口，IsZoomed 恒为 false，
+        // 拿它判断"是否全屏"会让两个方向的断言都失去意义。
+        bool FillsScreen() =>
+            WindowEnumerator.ReadVisibleBounds(active).Width >= workArea.Width - 4;
+
+        // 双击分组栏退出全屏。分组栏就是这个组的标题栏，双击语义必须和
+        // 双击普通窗口标题栏一致 —— 能全屏，也能再双击退出全屏。
+        orchestrator.RailDoubleClickForTest(maximized.Id);
+        PumpMessages(TimeSpan.FromSeconds(1));
+
+        var exited = WindowEnumerator.ReadVisibleBounds(active);
+
+        failures += Check(
+            "双击分组栏可退出全屏",
+            !FillsScreen(),
+            $"窗口仍占满屏幕：{exited}");
+
+        failures += Check(
+            "退出全屏后回到进入之前的矩形",
+            Math.Abs(exited.Width - beforeFullscreen.Width) <= 4
+                && Math.Abs(exited.Height - beforeFullscreen.Height) <= 4,
+            $"进入全屏前 {beforeFullscreen}，退出后 {exited} —— 没有回到原来的大小");
+
+        // 再双击一次全屏回去，这次全程只经由分组栏，不碰窗口标题栏。
+        orchestrator.RailDoubleClickForTest(maximized.Id);
+        PumpMessages(TimeSpan.FromSeconds(1));
+
+        failures += Check(
+            "双击分组栏可进入全屏",
+            FillsScreen(),
+            $"窗口没有占满屏幕：{WindowEnumerator.ReadVisibleBounds(active)}");
+
+        var toggledRail = orchestrator.GetRailForTest(maximized.Id);
+        var toggledBounds = toggledRail?.ActualBounds ?? default;
+
+        failures += Check(
+            "双击全屏后分组栏仍然可见",
+            toggledRail is { IsVisible: true } && toggledBounds.Top >= workArea.Top - 2,
+            $"分组栏 {toggledBounds}，工作区顶边 {workArea.Top}");
+
+        // 拿工作区顶边加分组栏高度当基准，而不是分组栏的底边。
+        //
+        // 用底边的话，分组栏一旦被顶出屏幕（bottom = 0），"窗口顶边 ≥ 0"就恒成立，
+        // 这条断言会在功能坏掉时照样通过 —— 恰好是它最该报警的时候。
+        var reservedTop = workArea.Top + toggledBounds.Height;
+
+        failures += Check(
+            "双击全屏后窗口仍为分组栏让位",
+            WindowEnumerator.ReadVisibleBounds(active).Top >= reservedTop - 2,
+            $"窗口顶边 {WindowEnumerator.ReadVisibleBounds(active).Top}，"
+                + $"应不小于 {reservedTop} —— 窗口盖住了分组栏");
+
+        // 让位必须落在**每个**成员上，不能只顾活动窗口。
+        //
+        // 组内窗口是叠在一起的，切一下标签，后面那个就浮上来 ——
+        // 它若停在没让位的矩形上，用户切完标签就发现分组栏又没了。
+        var settled = orchestrator.GroupsForTest.FirstOrDefault();
+        var trespassers = settled is null
+            ? []
+            : settled.LiveTabs
+                .Select(t => (t.Title, Bounds: WindowEnumerator.ReadVisibleBounds(t.Identity.Handle)))
+                .Where(m => !m.Bounds.IsEmpty && m.Bounds.Top < reservedTop - 2)
+                .ToList();
+
+        failures += Check(
+            "组内每个成员都为分组栏让了位",
+            trespassers.Count == 0,
+            "这些成员盖住了分组栏："
+                + string.Join("、", trespassers.Select(m => $"{m.Title} 顶边 {m.Bounds.Top}")));
 
         orchestrator.DissolveEverything();
         PumpMessages(TimeSpan.FromMilliseconds(800));

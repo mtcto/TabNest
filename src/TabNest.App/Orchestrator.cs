@@ -383,7 +383,20 @@ internal sealed class Orchestrator : IDisposable
                 return;
             }
 
+            // 双击标题栏最大化时，系统会先按拖拽处理（双击以一次按下开始），
+            // 于是最大化事件落在提起状态里。提起对全屏没有意义 ——
+            // 立刻收掉提起状态转去走全屏，停靠在屏外的成员由全屏对齐一并拉回。
+            if (WindowEnumerator.IsMaximized(memberHandle))
+            {
+                _liftedGroupId = null;
+                _liftAuthority = 0;
+                HandleMemberMaximized(group, memberHandle);
+                return;
+            }
+
+            // 提起期间一律不发跨进程指令 —— 这正是提起状态存在的意义。
             var lifted = ResolveMemberBounds(memberHandle);
+
             if (lifted.IsEmpty || Near(lifted, group.Bounds, tolerance: 2))
             {
                 return;
@@ -409,6 +422,22 @@ internal sealed class Orchestrator : IDisposable
         //
         // 前台窗口即用户正在操作的窗口，用它当判据既简单又准确：
         // 被夹回尺寸的那个窗口不是前台，它的回声自然被忽略，回环断开。
+        // 最大化的成员必须给分组栏让出顶部，这件事与"谁在前台"无关，
+        // 所以排在前台判定**之前**。
+        //
+        // 放在后面就会被前台判定挡掉：双击分组栏触发的最大化，点的是设了
+        // WS_EX_NOACTIVATE 的分组栏，前台归属并不必然落在该成员身上；
+        // 于是对齐永远发不出去，窗口铺满整个工作区，分组栏被顶到 y = -34。
+        //
+        // 这里不会形成自激循环：!Near 一旦成立就不再发指令，对齐落实后自然收敛。
+        // 成员被用户最大化了（双击标题栏、点最大化按钮、Win+↑）——
+        // 转成分组全屏。这件事与"谁在前台"无关，所以排在前台判定**之前**。
+        if (WindowEnumerator.IsMaximized(memberHandle))
+        {
+            HandleMemberMaximized(group, memberHandle);
+            return;
+        }
+
         if (memberHandle != WindowEnumerator.ForegroundWindow())
         {
             // 仍要刷新分组栏：本次事件可能正是"对齐终于落实"的那一下，
@@ -425,20 +454,6 @@ internal sealed class Orchestrator : IDisposable
 
         var bounds = ResolveMemberBounds(memberHandle);
         var afterRead = watch.ElapsedMilliseconds;
-
-        // 最大化的成员也要被"对齐"到让位后的矩形 —— 它自己会铺满整个工作区，
-        // 不推它一把，分组栏就被压到屏幕外了。这是唯一需要对齐**发起者本身**的场合。
-        if (WindowEnumerator.IsMaximized(memberHandle)
-            && !Near(WindowEnumerator.ReadVisibleBounds(memberHandle), bounds, tolerance: 2))
-        {
-            var identity = FindTabByHandle(group, memberHandle)?.Identity;
-
-            if (identity is { } id)
-            {
-                _ = _controller.ExecuteAsync(
-                    new Core.Grouping.AlignWindowAction(id, bounds, KeepMaximized: true));
-            }
-        }
 
         // 容忍一两像素的抖动，否则会陷入"对齐 → 触发事件 → 再对齐"的自激循环。
         if (bounds.IsEmpty || Near(bounds, group.Bounds, tolerance: 2))
@@ -517,27 +532,40 @@ internal sealed class Orchestrator : IDisposable
     /// 普通情况就是它的可见边框。**最大化时不能照抄窗口矩形** ——
     /// 最大化窗口铺满整个工作区，而分组栏挂在窗口上方，坐标会变成负数、跑到屏幕外，
     /// 用户看到的就是"一全屏标签就没了"。
-    ///
-    /// 因此最大化时以**显示器工作区**为准，从顶部切出分组栏的高度。
-    /// 必须从工作区推算而不是从窗口当前矩形：后者已经是我们让位之后的结果，
-    /// 拿它再减一次会一轮轮往下缩。
     /// </summary>
-    private static PixelRect ResolveMemberBounds(nint hwnd)
+    private PixelRect ResolveMemberBounds(nint hwnd)
     {
         if (!WindowEnumerator.IsMaximized(hwnd))
         {
             return WindowEnumerator.ReadVisibleBounds(hwnd);
         }
 
+        var reserved = FullscreenBoundsFor(hwnd);
+
+        return reserved.IsEmpty ? WindowEnumerator.ReadVisibleBounds(hwnd) : reserved;
+    }
+
+    /// <summary>
+    /// 分组全屏时成员窗口应占据的矩形：显示器工作区从顶部切掉分组栏的高度。
+    ///
+    /// 必须从工作区推算而不是从窗口当前矩形：后者已经是让位之后的结果，
+    /// 拿它再减一次会一轮轮往下缩。
+    ///
+    /// 高度取自**用户设置**而非默认度量 —— 开了「使标签和背景栏更高」却按默认高度
+    /// 预留，分组栏就会有一截被窗口盖住。这类"设置项在某条路径上被忽略"的错误
+    /// 已经在 RefreshRail 上犯过一次。
+    /// </summary>
+    private PixelRect FullscreenBoundsFor(nint hwnd)
+    {
         var workArea = MonitorLookup.ForWindow(hwnd).WorkArea;
 
         if (workArea.IsEmpty)
         {
-            return WindowEnumerator.ReadVisibleBounds(hwnd);
+            return PixelRect.Empty;
         }
 
         var dpi = MonitorLookup.DpiForWindow(hwnd);
-        var railHeight = new RailMetrics().ScaleTo(dpi).Height;
+        var railHeight = RailAppearance.MetricsFor(_settings.Appearance).ScaleTo(dpi).Height;
 
         return new PixelRect(
             workArea.Left, workArea.Top + railHeight, workArea.Right, workArea.Bottom);
@@ -636,9 +664,15 @@ internal sealed class Orchestrator : IDisposable
             return;
         }
 
-        var bounds = authority != 0
-            ? WindowEnumerator.ReadVisibleBounds(authority)
-            : PixelRect.Empty;
+        // 松手时窗口是最大化的，说明这次"拖拽"其实是双击标题栏：
+        // 交给全屏逻辑，别按普通落位处理（照抄最大化矩形会盖住分组栏）。
+        if (authority != 0 && WindowEnumerator.IsMaximized(authority))
+        {
+            HandleMemberMaximized(group, authority);
+            return;
+        }
+
+        var bounds = authority != 0 ? ResolveMemberBounds(authority) : PixelRect.Empty;
 
         if (bounds.IsEmpty)
         {
@@ -1097,14 +1131,32 @@ internal sealed class Orchestrator : IDisposable
     /// <summary>测试入口：模拟某个成员上报了位置变化。</summary>
     internal void NotifyLocationForTest(nint hwnd) => OnLocationChanged(hwnd);
 
-    /// <summary>测试入口：把窗口最大化，模拟用户双击标题栏。</summary>
+    /// <summary>
+    /// 测试入口：把窗口最大化，模拟用户双击标题栏。
+    ///
+    /// 必须照抄系统真实的事件顺序：双击标题栏由一次按下开始，系统按拖拽处理，
+    /// 于是发出 MOVESIZESTART → 位置变化 → MOVESIZEEND。
+    /// 早先这个钩子只调 OnLocationChanged，绕开了首尾两个拖拽事件，
+    /// 结果是"提起"与"落位"两条分支各自都会把窗口重新铺满工作区、
+    /// 把分组栏顶出屏幕，而测试全绿 —— 用户一双击就发现标签没了。
+    /// 测试模拟真实输入时，少发一个事件就等于没测。
+    /// </summary>
     internal void MaximizeForTest(nint hwnd)
     {
+        OnDragStart(hwnd);
         WindowEnumerator.Maximize(hwnd);
 
-        // 最大化会触发位置事件，但测试里不跑事件循环，直接走同一条处理路径。
+        // 测试里不跑事件循环，直接走事件会走到的同一条处理路径。
         OnLocationChanged(hwnd);
+        OnDragEnd(hwnd);
     }
+
+    /// <summary>测试入口：模拟用户双击分组栏空白处。</summary>
+    internal void RailDoubleClickForTest(string groupId) => OnRailInteraction(new RailInteraction
+    {
+        GroupId = groupId,
+        Action = Rail.RailAction.ToggleMaximize,
+    });
 
     /// <summary>测试入口：把指定窗口切到前台，供依赖前台判定的路径测试。</summary>
     internal void ActivateForTest(nint hwnd) =>
@@ -1247,6 +1299,12 @@ internal sealed class Orchestrator : IDisposable
             return;
         }
 
+        if (interaction.Action is RailAction.ToggleMaximize)
+        {
+            ToggleGroupMaximize(groupId);
+            return;
+        }
+
         // 中键该做什么由用户设置决定。分组栏只上报"中键点了哪个标签"，
         // 策略留在编排层，避免同一个决定散落在两处。
         if (interaction.Action is RailAction.MiddleClickTab)
@@ -1284,6 +1342,130 @@ internal sealed class Orchestrator : IDisposable
         {
             ScheduleSweep(groupId);
         }
+    }
+
+    /// <summary>
+    /// 处于分组全屏的组，以及进入全屏之前的组矩形（退出时原样放回）。
+    /// </summary>
+    private readonly Dictionary<string, PixelRect> _fullscreenGroups = [];
+
+    /// <summary>
+    /// 某个成员被系统真正最大化了：进入或退出分组全屏。
+    ///
+    /// 已在全屏时再来一次，说明用户是在双击标题栏**退出**全屏 ——
+    /// 假最大化下窗口在系统眼里是普通窗口，双击标题栏只会把它最大化，
+    /// 不这样判断的话用户就再也退不出全屏了。
+    /// </summary>
+    private void HandleMemberMaximized(GroupSession group, nint memberHandle)
+    {
+        if (_fullscreenGroups.ContainsKey(group.Id))
+        {
+            WindowEnumerator.Unmaximize(memberHandle);
+            ExitGroupFullscreen(group.Id);
+            return;
+        }
+
+        EnterGroupFullscreen(group, memberHandle);
+    }
+
+    /// <summary>
+    /// 双击分组栏空白处：整组全屏 / 退出全屏。
+    /// </summary>
+    private void ToggleGroupMaximize(string groupId)
+    {
+        var group = _manager.FindGroup(groupId);
+
+        if (group?.ActiveTab?.Identity.Handle is not { } active || active == 0)
+        {
+            return;
+        }
+
+        if (_fullscreenGroups.ContainsKey(groupId))
+        {
+            ExitGroupFullscreen(groupId);
+        }
+        else
+        {
+            EnterGroupFullscreen(group, active);
+        }
+    }
+
+    /// <summary>
+    /// 让整组占满「工作区减去分组栏」，成员一律先落回普通窗口。
+    ///
+    /// **不能用真的最大化。** 实测 Chromium 系应用（Electron 外壳、Chrome、
+    /// VS Code、Slack —— 窗口类 Chrome_WidgetWin_1）在最大化状态下会在
+    /// WM_WINDOWPOSCHANGING 里把矩形强行改回整个工作区：SetWindowPos 调用
+    /// 返回成功，窗口却立刻弹回去盖住分组栏。UWP 的 ApplicationFrameWindow 接受重定位，
+    /// Harness 的 WPF 窗口也接受 —— 所以"保持最大化再让位"的方案在测试里全绿、
+    /// 在用户最常分组的那批应用上全坏。
+    ///
+    /// 改为"假最大化"：SW_RESTORE 变回普通窗口，再手动铺满让位后的矩形。
+    /// 普通窗口没有那套强制逻辑，实测 Chromium 与 UWP 都稳定落位不弹回。
+    /// 代价是系统不认为窗口处于最大化（最大化按钮图标、贴靠布局按普通窗口处理），
+    /// 换来的是它在所有应用上真的有效。
+    /// </summary>
+    private void EnterGroupFullscreen(GroupSession group, nint anchor)
+    {
+        if (_fullscreenGroups.ContainsKey(group.Id))
+        {
+            return;
+        }
+
+        var reserved = FullscreenBoundsFor(anchor);
+
+        if (reserved.IsEmpty)
+        {
+            return;
+        }
+
+        // 先登记再动窗口：下面的还原会发出位置事件，重新走到这条路径上来，
+        // 登记在前才能挡住重入。
+        _fullscreenGroups[group.Id] = group.Bounds;
+
+        FileLog.Info($"组 {group.Id} 进入分组全屏，成员矩形 {reserved}。");
+        ApplyGroupBounds(group.Id, reserved);
+    }
+
+    /// <summary>退出分组全屏，把整组放回进入之前的矩形。</summary>
+    private void ExitGroupFullscreen(string groupId)
+    {
+        if (!_fullscreenGroups.Remove(groupId, out var restore) || restore.IsEmpty)
+        {
+            return;
+        }
+
+        FileLog.Info($"组 {groupId} 退出分组全屏，放回 {restore}。");
+        ApplyGroupBounds(groupId, restore);
+    }
+
+    /// <summary>把整组（含发起者）摆到指定矩形并刷新分组栏。</summary>
+    private void ApplyGroupBounds(string groupId, PixelRect bounds)
+    {
+        var result = _manager.SetGroupBounds(groupId, bounds);
+        var group = result.Group ?? _manager.FindGroup(groupId);
+
+        if (group is null)
+        {
+            return;
+        }
+
+        // 与落位一样，这里必须无条件对齐**全部**成员，包括发起者本身 ——
+        // 它正是那个占住分组栏位置的窗口。
+        var actions = group.LiveTabs
+            .Select(tab => (Core.Grouping.WindowAction)
+                new Core.Grouping.AlignWindowAction(tab.Identity, bounds))
+            .ToList();
+
+        if (actions.Count > 0)
+        {
+            _ = _controller.ExecuteAsync(actions).ContinueWith(
+                t => ReportFailures(t.Result),
+                TaskScheduler.Default);
+        }
+
+        RefreshRail(group);
+        PersistSession();
     }
 
     /// <summary>
@@ -2307,6 +2489,10 @@ internal sealed class Orchestrator : IDisposable
 
     private void CloseRail(string groupId)
     {
+        // 组没了，全屏状态也跟着作废 —— 留着的话，下一个碰巧复用同一个组 ID
+        // 的组会带着一份陌生的"退出全屏该回哪里"。
+        _fullscreenGroups.Remove(groupId);
+
         if (_rails.Remove(groupId, out var rail))
         {
             rail.Dispose();

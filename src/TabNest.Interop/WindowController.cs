@@ -194,7 +194,7 @@ public sealed class WindowController : IDisposable
             return action switch
             {
                 ActivateWindowAction => Activate(hwnd, stopwatch),
-                AlignWindowAction align => AlignTo(hwnd, align.Bounds, align.KeepMaximized, stopwatch),
+                AlignWindowAction align => AlignTo(hwnd, align.Bounds, stopwatch),
                 LowerWindowAction => Lower(hwnd, stopwatch),
                 RestoreWindowAction restore => Restore(hwnd, restore.Snapshot, stopwatch),
                 SetTaskbarButtonAction taskbar => SetTaskbarButton(hwnd, taskbar.Visible, stopwatch),
@@ -360,8 +360,7 @@ public sealed class WindowController : IDisposable
     /// DWM 可见边框。两者在 Windows 10/11 上左右各差约 7 像素，直接传入会让成员窗口
     /// 每次对齐都往外扩一圈。因此先算出两者的差值再补偿。
     /// </summary>
-    private OperationResult AlignTo(
-        nint hwnd, PixelRect target, bool keepMaximized, Stopwatch stopwatch)
+    private OperationResult AlignTo(nint hwnd, PixelRect target, Stopwatch stopwatch)
     {
         // 这里刻意**不**做 IsHungAppWindow 预检。
         //
@@ -371,16 +370,16 @@ public sealed class WindowController : IDisposable
         //
         // 激活操作仍然保留预检 —— 那里需要同步确认焦点是否真的转移了。
 
-        // 最大化的窗口默认先还原成普通状态再摆放。
+        // 最大化的窗口一律先还原成普通状态再摆放。
         //
         // 早期版本在这里直接跳过对齐，结果是：只要有一个成员窗口处于最大化，
         // 它就永远不会被移动到组矩形，用户看到"有标签栏但窗口根本没合并"。
         // 原始的最大化状态已记在快照里，拆分时会还原回去，所以这里的还原是安全的。
         //
-        // 但「分组全屏」是例外：那里要窗口**保持**最大化、只让出分组栏的高度。
-        // 实测最大化窗口可以就地重定位并保持 IsZoomed —— 双击标题栏照常还原，
-        // 最大化按钮状态也正确；取消最大化再摆一个同样大的矩形则会丢掉这些语义。
-        if (!keepMaximized && User32.IsZoomed(hwnd))
+        // 也不存在"保持最大化再让位"的可能：Chromium 系应用会把最大化矩形
+        // 强行改回整个工作区，重定位当场弹回。分组全屏因此走「假最大化」——
+        // 还原成普通窗口，再由编排层铺满让位后的矩形。
+        if (User32.IsZoomed(hwnd))
         {
             User32.ShowWindow(hwnd, User32.SW_RESTORE);
         }

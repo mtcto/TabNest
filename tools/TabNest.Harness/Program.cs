@@ -139,6 +139,7 @@ internal sealed class LauncherWindow : Window
             "fixed" or "fixedsize" => TestWindows.CreateFixedSize,
             "hideonclose" or "hide" => TestWindows.CreateHideOnClose,
             "child" or "titledchild" => TestWindows.CreateWithTitledChild,
+            "stubborn" or "stubbornmax" => TestWindows.CreateStubbornMaximize,
             _ => null,
         };
 

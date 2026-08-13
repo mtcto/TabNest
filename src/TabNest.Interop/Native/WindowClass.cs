@@ -34,6 +34,7 @@ internal static partial class WindowClass
     public const uint WM_MOUSEMOVE = 0x0200;
     public const uint WM_LBUTTONDOWN = 0x0201;
     public const uint WM_LBUTTONUP = 0x0202;
+    public const uint WM_LBUTTONDBLCLK = 0x0203;
     public const uint WM_RBUTTONUP = 0x0205;
     public const uint WM_MBUTTONUP = 0x0208;
     public const uint WM_CAPTURECHANGED = 0x0215;

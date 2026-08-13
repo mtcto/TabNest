@@ -34,6 +34,12 @@ public enum RailAction
     MoveGroup,
 
     /// <summary>
+    /// 双击了分组栏的空白处：切换整组的全屏。
+    /// 与双击普通窗口标题栏的手感一致 —— 分组栏在用户心里就是这个组的标题栏。
+    /// </summary>
+    ToggleMaximize,
+
+    /// <summary>
     /// 中键点击了标签。
     ///
     /// 刻意不在这里直接发 CloseTab：中键该做什么由用户设置决定，
@@ -187,6 +193,10 @@ internal sealed class TabRailWindow : Win32Window
 
             case Messages.CaptureChanged:
                 OnCaptureLost();
+                return 0;
+
+            case Messages.LeftButtonDoubleClick:
+                OnDoubleClick(ToPoint(lParam));
                 return 0;
 
             case Messages.MiddleButtonUp:
@@ -443,6 +453,27 @@ internal sealed class TabRailWindow : Win32Window
         if (wasMovingGroup)
         {
             Emit(RailAction.MoveGroupEnd, default);
+        }
+    }
+
+    /// <summary>
+    /// 双击分组栏空白处 = 切换整组全屏。
+    ///
+    /// 只在空白拖动区响应：双击标签本身应当是"切到那个标签"的两次点击，
+    /// 顺手把整组全屏了会很突兀。
+    /// </summary>
+    private void OnDoubleClick(PixelPoint point)
+    {
+        if (_state is { } state && state.Layout.IsDragArea(point))
+        {
+            // 双击的第一次按下已经把 _isPressed 置起来了，不清掉的话
+            // 松手时会被当成一次整组拖动的结束。
+            _isPressed = false;
+            _isDragging = false;
+            _isMovingGroup = false;
+            ReleaseMouseCapture();
+
+            Emit(RailAction.ToggleMaximize, default);
         }
     }
 
