@@ -1,4 +1,4 @@
-TabNest 0.1.0 is not Authenticode-signed.
+This TabNest build is not Authenticode-signed.
 
 Windows SmartScreen may show "Windows protected your PC".
 Click More info, confirm the file name, then Run anyway.
@@ -13,7 +13,7 @@ yourself and sign TabNest.exe plus this setup package.
 
 ------------------------------------------------
 
-TabNest 0.1.0 未做代码签名。
+本安装包未做代码签名。
 
 SmartScreen 可能提示「Windows 已保护你的电脑」。
 请点「更多信息」，确认文件名后选择「仍要运行」。

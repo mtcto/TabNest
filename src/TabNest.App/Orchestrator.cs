@@ -2593,15 +2593,15 @@ internal sealed class Orchestrator : IDisposable
     }
 
     /// <summary>
-    /// 启动时把开机自启的设置重新落实到注册表。
+    /// 启动时把开机自启的设置与注册表对齐。
     ///
-    /// 方向是**设置 → 注册表**，而不是反过来：设置里记的是用户的意图，
-    /// 注册表项只是实现这个意图的机制。曾经写反过一次（以注册表为准去改设置），
-    /// 结果用户开着自启、注册表项因故不在时，我们把设置也一并关掉，
-    /// 等于替用户放弃了他明确表达过的要求。
+    /// 设置里开着时，方向是设置 → 注册表：清理工具删了那一项、或 exe 换了目录，
+    /// 都按当前可执行文件重写。曾经反过来（注册表没有就把设置关掉），等于替用户
+    /// 放弃他在设置里明确开过的选项。
     ///
-    /// 每次启动都重写还能自愈两种情况：清理工具删掉了那一项；
-    /// 程序被移动或重装到新目录，而注册表里还指着旧路径。
+    /// 设置里关着、注册表却有项时，视为安装程序勾选了「登录后自动启动」——
+    /// 安装包只写 Run 键，不改 settings.json。旧逻辑把这种情况当残留删掉，
+    /// 装完第一次启动就把刚勾的自启清了，重启自然起不来。
     /// </summary>
     private void ReconcileStartupSetting()
     {
@@ -2627,10 +2627,17 @@ internal sealed class Orchestrator : IDisposable
             return;
         }
 
-        // 设置为关闭却仍有残留项（例如上一次卸载没清干净），一并清掉。
         if (registered)
         {
-            StartupRegistration.Set(false, exe);
+            _settings = _settings with { RunAtStartup = true };
+            SaveSettings();
+
+            if (!StartupRegistration.Set(true, exe))
+            {
+                FileLog.Warn("安装勾选的开机自启无法刷新路径，已保留注册表原值。");
+            }
+
+            FileLog.Info("已把安装程序写入的开机自启收回设置。");
         }
     }
 

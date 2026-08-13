@@ -34,7 +34,7 @@ TabNest groups unrelated Windows applications into a single tabbed workspace. Dr
 
 It manages **windows**, not application internals. It never reads, modifies, or transmits the content of any document, and never loads code into another process.
 
-> **Status — 0.1.0, Phase 1 complete.** Grouping, switching, drag-merge/split, rules, saved workspaces, hotkeys, taskbar policies and the settings centre all work. Tabs drawn *inside* the native title bar require the Phase 2 injection layer and are not implemented yet. **This release is unsigned** — see [Unsigned builds](#unsigned-builds).
+> **Status — 0.1.1, Phase 1 complete.** Grouping, switching, drag-merge/split, rules, saved workspaces, hotkeys, taskbar policies and the settings centre all work. Tabs drawn *inside* the native title bar require the Phase 2 injection layer and are not implemented yet. **This release is unsigned** — see [Unsigned builds](#unsigned-builds).
 
 ## Why
 
@@ -114,17 +114,17 @@ The tradeoff is honest and it is not free: staying outside means TabNest cannot 
 From [Releases](../../releases) download either:
 
 - `TabNest.exe` — copy it anywhere and double-click. No runtime, no administrator rights.
-- `TabNest-0.1.0-setup.exe` — optional installer: Start-menu shortcut, launch-at-login, and a clean uninstall that asks the running instance to restore windows first.
+- `TabNest-0.1.1-setup.exe` — optional installer: Start-menu shortcut, launch-at-login, and a clean uninstall that asks the running instance to restore windows first.
 
 Settings and saved groups live in `%LOCALAPPDATA%\TabNest\` and survive uninstall.
 
 ### Unsigned builds
 
-**0.1.0 is not Authenticode-signed.** The publisher has not purchased an OV/EV code-signing certificate. That is a deliberate choice for this release, not a missing file in the zip.
+**0.1.1 is not Authenticode-signed.** The publisher has not purchased an OV/EV code-signing certificate. That is a deliberate choice for this release, not a missing file in the zip.
 
 What you may see, and what to do:
 
-1. **SmartScreen — "Windows protected your PC".** This is the usual warning for a new, unsigned download. Click **More info**, confirm the file name is `TabNest.exe` or `TabNest-0.1.0-setup.exe`, then **Run anyway**. The prompt is per file hash: it can appear once for the installer and again for the installed `TabNest.exe`.
+1. **SmartScreen — "Windows protected your PC".** This is the usual warning for a new, unsigned download. Click **More info**, confirm the file name is `TabNest.exe` or `TabNest-0.1.1-setup.exe`, then **Run anyway**. The prompt is per file hash: it can appear once for the installer and again for the installed `TabNest.exe`.
 2. **Antivirus quarantine or a "trojan" alert.** Unsigned window-management tools are a common false-positive class. Restore the file from quarantine if you trust the GitHub source. If your environment forbids unsigned binaries, do not run this build.
 3. **Corporate machines that block unsigned executables.** There is nothing to click through. You need a signed build, or an IT exception.
 
