@@ -34,7 +34,7 @@ TabNest groups unrelated Windows applications into a single tabbed workspace. Dr
 
 It manages **windows**, not application internals. It never reads, modifies, or transmits the content of any document, and never loads code into another process.
 
-> **Status — 0.1.1, Phase 1 complete.** Grouping, switching, drag-merge/split, rules, saved workspaces, hotkeys, taskbar policies and the settings centre all work. Tabs drawn *inside* the native title bar require the Phase 2 injection layer and are not implemented yet. **This release is unsigned** — see [Unsigned builds](#unsigned-builds).
+> **Status — 0.1.1, feature-complete for what it sets out to do.** Grouping, switching, drag-merge/split, rules, saved workspaces, hotkeys, taskbar policies and the settings centre all work. Tabs drawn *inside* the native title bar would mean injecting code into other processes, which TabNest deliberately does not do — see [Roadmap](#roadmap). **This release is unsigned** — see [Unsigned builds](#unsigned-builds).
 
 ## Why
 
@@ -48,7 +48,7 @@ TabNest takes the opposite bet: stay outside every other process, and pay for it
 
 **11.3 MB, one file, no runtime.** Trimmed, single-file, compressed, self-contained. Download it and double-click. No .NET runtime, no VC++ redistributable, no admin rights.
 
-**Measurably idle.** 0.000% CPU over a 20-second idle sample, 35 MB working set, 15 threads. There is no polling anywhere in the product; every wakeup traces back to a real window event.
+**Measurably idle.** At or below the resolution floor of a 20-second CPU sample, with a 32 MB working set and 15 threads. There is no polling anywhere in the product; every wakeup traces back to a real window event. Verify it yourself with `TabNest.exe --benchmark`.
 
 **Your windows are always recoverable.** A snapshot is written to disk *before* every window write. Crash it, kill it, uninstall it — windows return to their original positions and taskbar buttons are restored.
 
@@ -73,30 +73,32 @@ TabNest takes the opposite bet: stay outside every other process, and pay for it
 
 The only mature product in this category is **Stardock Groupy 2**. TabNest was built against it deliberately, and the numbers below were measured rather than estimated.
 
-> **Method.** Groupy 2 v2.3.1 and TabNest 0.1.0, same machine (Windows 11 26100, x64, 24 logical cores), both idle for 20 seconds with no mouse or keyboard input. Memory and handles from the process table; CPU from `TotalProcessorTime` deltas; injection count by walking the module list of every readable process. Groupy figures are the sum of its resident processes (`GroupyCtrl` + `GroupySrv` + two helpers). Full data and method: [`docs/competitive-analysis.md`](docs/competitive-analysis.md). **Your numbers will differ** — this is one machine, one configuration, one point in time.
+> **Method.** Groupy 2 v2.3.1 and TabNest 0.1.1, same machine (Windows 11 26100, x64, 24 logical cores), both idle for 20 seconds with no mouse or keyboard input. Memory and handles from the process table; CPU from `TotalProcessorTime` deltas; injection count by walking the module list of every readable process. Groupy figures are the sum of its resident processes (`GroupyCtrl` + `GroupySrv` + two helpers). TabNest figures are the median of four runs, reproducible with `TabNest.exe --benchmark`. Full data and method: [`docs/competitive-analysis.md`](docs/competitive-analysis.md). **Your numbers will differ** — this is one machine, one configuration, one point in time.
 
-| | **TabNest 0.1.0** | Groupy 2 (v2.3.1) |
+| | **TabNest 0.1.1** | Groupy 2 (v2.3.1) |
 |---|---|---|
 | License | **MIT, open source** | Commercial, closed source |
 | Price | **Free** | Paid |
 | **DLL injection into other processes** | **None** | 46 processes on the test machine |
-| Resident working set | **35.2 MB** | 78 MB |
-| Idle CPU, 20 s sample | **0.000%** | 0.08% of one core |
+| Resident working set | **32.1 MB** | 78 MB |
+| Idle CPU, 20 s sample | 0.00–0.08% | 0.08% of one core |
 | Threads | **15** | 30 |
-| Handles | **322** | 706 |
+| Handles | **343** | 706 |
 | Download size | **11.3 MB, single exe** | 24.6 MB installer |
 | Extra runtime needed | **None** | None |
 | Background service | **None** | Yes (`GroupySrv`) |
 | Dark theme | **Yes** | No |
 | Settings search | Not yet | No |
-| Tabs drawn inside the native title bar | Not yet — Phase 2 | **Yes** |
+| Tabs drawn inside the native title bar | No — by design | **Yes** |
 | Replaces Explorer / Notepad native tabs | No | **Yes** |
 | Per-document and per-folder rules | No | **Yes** |
 | Tab hover previews | No | **Yes** |
 | Code signed | Not yet | **Yes** |
-| Maturity | 0.1.0 | Shipping since 2017 |
+| Maturity | 0.1.1 | Shipping since 2017 |
 
-**Where Groupy is genuinely ahead:** integrated tabs, native tab replacement, document-level rules, hover previews, a signed binary, and years of compatibility work. Those first four all require running code inside the target process, which is exactly what TabNest declines to do in Phase 1. If you need tabs rendered into the real title bar today, buy Groupy — it is a good product and it earned that capability.
+**On the idle-CPU row: that is a tie, not a win.** 0.08% of one core over 20 seconds is 16 ms — one scheduler tick, which is the resolution floor of this measurement. Groupy lands on exactly the same 16 ms. Both tools are genuinely idle when idle, and neither can be shown to beat the other with this method. Reported here rather than quietly dropped, because an earlier version of this table claimed a difference that the data does not support.
+
+**Where Groupy is genuinely ahead:** integrated tabs, native tab replacement, document-level rules, hover previews, a signed binary, and years of compatibility work. Those first four all require running code inside the target process, which is exactly what TabNest declines to do — not yet, but as a standing decision. If you want tabs rendered into the real title bar, buy Groupy: it is a good product and it earned that capability by paying a price TabNest is not paying.
 
 ### Why no injection matters
 
@@ -208,21 +210,23 @@ Longer engineering notes — including the failures that produced these rules �
 
 **Focus transfer degrades when TabNest has no foreground rights.** Code injected into a target process inherits its foreground privilege; TabNest, running outside, is subject to Windows' foreground lock. When you click a tab, TabNest received the last input event and qualifies, so focus moves normally. Without user input — a scripted call, for instance — a four-stage fallback chain ends at *raise without focus*: the window comes to the front, but the keyboard caret stays where it was. This is degradation, not failure, and `--selftest` reports the two outcomes separately.
 
-**The tab rail is a separate window, so it can lag by a frame.** Groupy's rail is seamless because it is drawn by injected code inside the window's own title bar. TabNest's rail follows the target window from outside, which is structurally always one frame behind during fast drags. It overlaps the window's top corners to hide the seam. A true fix needs the Phase 2 injection layer.
+**The tab rail is a separate window, so it can lag by a frame.** Groupy's rail is seamless because it is drawn by injected code inside the window's own title bar. TabNest's rail follows the target window from outside, which is structurally always one frame behind during fast drags. It overlaps the window's top corners to hide the seam. Removing that last frame of lag entirely would require drawing from inside the target process, which is not something TabNest does.
 
 **The rules UI is an application list, not a rule editor.** The Rules page is a list of executables plus an *"only allow these apps"* checkbox — block-list when unchecked, allow-list when checked. The full rule engine (process + window class + title, partial matching, sub-rules, priority) works but must be configured by hand in `settings.json`. Making everyone face a multi-field form to serve a handful of complex cases puts the cost in the wrong place; hand-written rules are never overwritten by the UI and the page tells you they exist.
 
 **Group fullscreen uses "fake maximize".** Chromium-based apps force their rectangle back to the full work area while maximized, so a genuinely maximized window cannot give up the strip the tab rail needs. TabNest instead restores the window and sizes it to the work area minus the rail. It looks identical, but Windows does not consider the window maximized, which affects the maximize button glyph and Snap Layouts.
 
-**Not implemented:** integrated tabs and native tab replacement (both need Phase 2), a hotkey rebinding UI (hotkeys are viewable and can be switched off; rebinding needs `settings.json`), and code signing.
+**Not implemented:** integrated tabs and native tab replacement (both would require injection — a deliberate omission, see [Roadmap](#roadmap)), a hotkey rebinding UI (hotkeys are viewable and can be switched off; rebinding needs `settings.json`), and code signing.
 
 ## Roadmap
 
-**Phase 1 — complete.** Pure C#, no injection into any process. Grouping, switching, drag merge and split, rules, workspaces, taskbar button policies, hover merge bar, batch adoption, group fullscreen. Tabs are drawn on a rail above the window.
+**TabNest does not inject, and there is no plan for it to start.** Tabs live on a rail above the window; that is the whole product, not a stepping stone to something else. The settings centre has no mode switch because there is only one mode.
 
-**Phase 2 — planned.** A native C++ layer that renders tabs into the target window's own title bar, replaces Explorer and Notepad native tabs, and proxies <kbd>Ctrl</kbd>+<kbd>T</kbd>/<kbd>N</kbd>. It will be **opt-in**: Phase 1's external mode stays the default and stays supported, and the domain logic is shared unchanged between them.
+An earlier plan had a second phase adding a native injection layer for tabs drawn inside the real title bar. That is **shelved**. It buys four things — integrated tabs, replacing Explorer/Notepad native tabs, proxying <kbd>Ctrl</kbd>+<kbd>T</kbd>/<kbd>N</kbd>, and document-level rules — and every one of them requires running code inside other people's processes. That is a large, permanent cost to the property most people would choose this tool for.
 
-Phase 2 is bound by three non-negotiable rules: rendering and hit-testing must be fully self-contained inside the host process; the host's UI thread must never be blocked; and the injected layer must never read or transmit the target's memory, documents, or input.
+If enough people ask for integrated tabs, the way to do it without breaking that promise is a **separate optional download**, so the default binary stays injection-free and keeps its antivirus profile clean. Open an issue if you want it; real demand is what would move this.
+
+What is planned near-term: code signing, screenshots, and whatever compatibility problems real usage turns up.
 
 ## Contributing
 

@@ -2,16 +2,6 @@ using TabNest.Core.Rules;
 
 namespace TabNest.Core.Models;
 
-/// <summary>标签承载方式。</summary>
-public enum TabHostingMode
-{
-    /// <summary>标签轨道贴在窗口标题栏上方。阶段一唯一可用的方式。</summary>
-    RailAbove = 0,
-
-    /// <summary>标签集成进目标窗口标题栏。需要注入层，阶段二提供。</summary>
-    IntegratedTitleBar = 1,
-}
-
 /// <summary>
 /// 标签栏可见性策略。
 ///
@@ -152,8 +142,6 @@ public sealed record AppSettings
     /// 全局主开关。关闭时拆散所有组并还原窗口，但保留托盘与配置，不退出进程。
     /// </summary>
     public bool Enabled { get; init; } = true;
-
-    public TabHostingMode HostingMode { get; init; } = TabHostingMode.RailAbove;
 
     public TaskbarButtonPolicy TaskbarButtons { get; init; } = TaskbarButtonPolicy.ShowAll;
 

@@ -403,8 +403,8 @@ public sealed class WindowEnumerator(ProcessInspector processes)
     /// 粗略判断窗口是否自绘标题栏。
     ///
     /// 依据是缺少 <c>WS_CAPTION</c> 却仍有可调整大小的边框 —— Electron、IDEA、Chrome
-    /// 这类应用普遍如此。阶段一这个判断不影响能否分组（轨道贴在窗口上方），
-    /// 它只决定阶段二能否使用集成标签模式，因此准确度要求不高。
+    /// 这类应用普遍如此。这个判断不影响能否分组（分组栏贴在窗口上方，与标题栏无关），
+    /// 只作为诊断信息呈现，因此准确度要求不高。
     /// </summary>
     public static bool HasCustomTitleBar(nint hwnd)
     {

@@ -579,19 +579,6 @@ internal static class SettingsRenderer
                     break;
                 }
 
-            case Illustration.IntegratedTitleBar:
-                {
-                    // 标签长在标题栏里，与窗口连成一体。
-                    var barHeight = unit * 2;
-                    c.FillRect(new PixelRect(area.Left, area.Top, area.Right, area.Bottom), fill);
-
-                    var tabWidth = area.Width / 3;
-                    c.FillRect(
-                        PixelRect.FromSize(area.Left + unit, area.Top, tabWidth, barHeight),
-                        accent);
-                    break;
-                }
-
             case Illustration.TaskbarAll:
                 PaintTaskbar(c, area, fill, accent, buttons: 3, highlighted: 3);
                 break;

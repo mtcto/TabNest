@@ -31,10 +31,6 @@ public static class SettingsPages
         _ => "关于",
     };
 
-    /// <summary>阶段一尚未提供集成模式，统一用这句说明，避免各处措辞不一。</summary>
-    private const string IntegratedPending =
-        "集成标签页需要把标签绘制进目标窗口的标题栏，这只能在目标进程内完成，将于下一版本随注入层提供。";
-
     public static PageContent Build(SettingsPage page, AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -57,31 +53,6 @@ public static class SettingsPages
         Subtitle = "最常用的几项设置。",
         Blocks =
         [
-            new SectionBlock
-            {
-                Title = "选择标签类型",
-                Description = "标签栏的呈现方式。",
-            },
-            new ChoiceBlock
-            {
-                Id = SettingId.HostingMode,
-                Value = (int)s.HostingMode,
-                Options =
-                [
-                    new ChoiceOption(
-                        (int)TabHostingMode.RailAbove,
-                        "将标签页在上方",
-                        "标签栏贴在窗口标题栏上方，适用于所有应用。",
-                        Illustration.RailAbove),
-                    new ChoiceOption(
-                        (int)TabHostingMode.IntegratedTitleBar,
-                        "集成标签页",
-                        "标签直接绘制在窗口标题栏内，视觉上与原生标签无异。",
-                        Illustration.IntegratedTitleBar,
-                        DisabledReason: IntegratedPending),
-                ],
-            },
-
             new SectionBlock { Title = "分组窗口的任务栏按钮" },
             new ChoiceBlock
             {
@@ -647,7 +618,6 @@ public static class SettingsPages
 
         return id switch
         {
-            SettingId.HostingMode => s with { HostingMode = (TabHostingMode)value },
             SettingId.TaskbarButtons => s with { TaskbarButtons = (TaskbarButtonPolicy)value },
             SettingId.RoundedTabs => s with
             {

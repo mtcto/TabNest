@@ -13,7 +13,6 @@ public enum SettingId
 
     // 总览
     MasterEnabled,
-    HostingMode,
     ShowHoverBar,
     TaskbarButtons,
     RunAtStartup,
@@ -57,7 +56,7 @@ public abstract record ContentBlock
     /// 该元素为何被禁用。null 表示可用。
     ///
     /// 刻意携带原因而不是一个 bool：灰掉一个控件却不说为什么，是设置界面里
-    /// 最让人恼火的事。阶段一的"集成标签页"必须明确告诉用户它在等什么。
+    /// 最让人恼火的事。要么说清楚它在等什么，要么干脆别显示这个选项。
     /// </summary>
     public string? DisabledReason { get; init; }
 
@@ -106,8 +105,6 @@ public enum Illustration
     /// <summary>窗口上方一条标签栏。</summary>
     RailAbove,
 
-    /// <summary>标签集成在标题栏内。</summary>
-    IntegratedTitleBar,
 
     /// <summary>任务栏显示全部窗口按钮。</summary>
     TaskbarAll,
