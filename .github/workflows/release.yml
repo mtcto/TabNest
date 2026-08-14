@@ -1,0 +1,130 @@
+# 打标签即发版。
+#
+# 推一个 v* 标签就会：跑单元测试 → 构建裁剪单文件 exe → 打安装包 →
+# 计算 SHA256 → 建 GitHub Release 并上传两个附件。
+#
+# 用仓库自带的 GITHUB_TOKEN，不需要任何个人令牌。
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # 允许手动重跑某个已存在的标签（改了发布说明、上次跑挂了）。
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的标签，例如 v0.1.2"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # 必须用 Windows：产物是 win-x64 单文件，且安装包要 Inno Setup。
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          # 版本由 global.json 锁定，这里不重复写死，避免两处漂移。
+          global-json-file: global.json
+
+      - name: 单元测试
+        run: dotnet test --nologo -v minimal
+
+      - name: 构建单文件产物
+        run: >
+          dotnet publish src/TabNest.App -c Release -r win-x64 -o publish/v1
+          --self-contained true
+          -p:PublishTrimmed=true
+          -p:PublishSingleFile=true
+          -p:EnableCompressionInSingleFile=true
+
+      # 装包脚本里的版本号必须和标签一致，否则产物文件名与 Release 对不上。
+      # 与其相信人手同步，不如在这里挡住。
+      - name: 核对版本号与标签一致
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}" -replace '^v',''
+          $props = Select-String -Path Directory.Build.props -Pattern '<Version>(.+?)</Version>'
+          $version = $props.Matches[0].Groups[1].Value
+          $iss = Select-String -Path packaging/TabNest.iss -Pattern '#define AppVersion "(.+?)"'
+          $issVersion = $iss.Matches[0].Groups[1].Value
+          "标签 $tag / Directory.Build.props $version / TabNest.iss $issVersion"
+          if ($version -ne $tag -or $issVersion -ne $tag) {
+            throw "版本号不一致：标签 $tag，props $version，iss $issVersion"
+          }
+
+      - name: 打安装包
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "$env:ProgramFiles\Inno Setup 6\ISCC.exe" }
+          if (-not (Test-Path $iscc)) { throw "运行器上找不到 Inno Setup" }
+          & $iscc packaging/TabNest.iss
+          if ($LASTEXITCODE -ne 0) { throw "打包失败" }
+
+      - name: 计算校验值
+        id: hash
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}" -replace '^v',''
+          $exe = (Get-FileHash publish/v1/TabNest.exe -Algorithm SHA256).Hash
+          $setup = (Get-FileHash "publish/installer/TabNest-$tag-setup.exe" -Algorithm SHA256).Hash
+          "exe=$exe" >> $env:GITHUB_OUTPUT
+          "setup=$setup" >> $env:GITHUB_OUTPUT
+
+      - name: 发布
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $version = $tag -replace '^v',''
+
+          $notes = @"
+          给任意 Windows 应用加上浏览器式标签页 —— 且不向任何进程注入 DLL。
+
+          下载 ``TabNest.exe`` 放到任意目录双击即可：单文件自包含，不需要 .NET 运行时，不需要 VC++ 运行库，不需要管理员权限。安装包额外提供开始菜单项、开机自启，以及卸载时先让运行中的实例把窗口还原回去。
+
+          > **本版本未做代码签名。** 首次运行会看到「Windows 已保护你的电脑」，点**更多信息 → 仍要运行**。杀软也可能误报 —— 未签名的窗口管理工具是常见误报类型。请核对下方哈希后再运行。
+
+          完整变更见 [提交记录](https://github.com/${{ github.repository }}/commits/$tag)，功能说明与竞品对比见 [README](https://github.com/${{ github.repository }}#readme)。
+
+          ## 校验
+
+          ``````
+          TabNest.exe               ${{ steps.hash.outputs.exe }}
+          TabNest-$version-setup.exe   ${{ steps.hash.outputs.setup }}
+          ``````
+
+          ``````powershell
+          Get-FileHash .\TabNest.exe -Algorithm SHA256
+          ``````
+
+          ## 运行环境
+
+          Windows 10 2004（内部版本 19041）及以上，x64。需要启用 DWM 并开启「拖动时显示窗口内容」—— 两项 TabNest 都会自检并提示。配置与已保存分组存放在 ``%LOCALAPPDATA%\TabNest\``。
+          "@
+
+          $notes | Out-File -FilePath notes.md -Encoding utf8
+
+          # 标签可能已经手工发布过；已存在就只更新说明并补附件。
+          $exists = gh release view $tag --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit $tag --notes-file notes.md
+            gh release upload $tag `
+              "publish/v1/TabNest.exe" `
+              "publish/installer/TabNest-$version-setup.exe" --clobber
+          } else {
+            gh release create $tag `
+              "publish/v1/TabNest.exe" `
+              "publish/installer/TabNest-$version-setup.exe" `
+              --title "TabNest $tag" --notes-file notes.md
+          }
