@@ -34,7 +34,7 @@ TabNest groups unrelated Windows applications into a single tabbed workspace. Dr
 
 It manages **windows**, not application internals. It never reads, modifies, or transmits the content of any document, and never loads code into another process.
 
-> **Status — 0.1.2, feature-complete for what it sets out to do.** Grouping, switching, drag-merge/split, rules, saved workspaces, hotkeys, taskbar policies and the settings centre all work. Tabs drawn *inside* the native title bar would mean injecting code into other processes, which TabNest deliberately does not do — see [Roadmap](#roadmap). **This release is unsigned** — see [Unsigned builds](#unsigned-builds).
+> **Status — 0.1.3, feature-complete for what it sets out to do.** Grouping, switching, drag-merge/split, rules, saved workspaces, hotkeys, taskbar policies and the settings centre all work. Tabs drawn *inside* the native title bar would mean injecting code into other processes, which TabNest deliberately does not do — see [Roadmap](#roadmap). **This release is unsigned** — see [Unsigned builds](#unsigned-builds).
 
 ## Why
 
@@ -48,7 +48,7 @@ TabNest takes the opposite bet: stay outside every other process, and pay for it
 
 **11.3 MB, one file, no runtime.** Trimmed, single-file, compressed, self-contained. Download it and double-click. No .NET runtime, no VC++ redistributable, no admin rights.
 
-**Measurably idle.** At or below the resolution floor of a 20-second CPU sample, with a 32 MB working set and 15 threads. There is no polling anywhere in the product; every wakeup traces back to a real window event. Verify it yourself with `TabNest.exe --benchmark`.
+**Measurably idle.** 0–16 ms of CPU across a 60-second idle sample — within a single scheduler tick — with a 32 MB working set and 11 threads. There is no polling anywhere in the product; every wakeup traces back to a real window event. Verify it yourself with `TabNest.exe --benchmark`.
 
 **Your windows are always recoverable.** A snapshot is written to disk *before* every window write. Crash it, kill it, uninstall it — windows return to their original positions and taskbar buttons are restored.
 
@@ -73,17 +73,17 @@ TabNest takes the opposite bet: stay outside every other process, and pay for it
 
 The only mature product in this category is **Stardock Groupy 2**. TabNest was built against it deliberately, and the numbers below were measured rather than estimated.
 
-> **Method.** Groupy 2 v2.3.1 and TabNest 0.1.2, same machine (Windows 11 26100, x64, 24 logical cores), both idle for 20 seconds with no mouse or keyboard input. Memory and handles from the process table; CPU from `TotalProcessorTime` deltas; injection count by walking the module list of every readable process. Groupy figures are the sum of its resident processes (`GroupyCtrl` + `GroupySrv` + two helpers). TabNest figures are the median of four runs, reproducible with `TabNest.exe --benchmark`. Full data and method: [`docs/competitive-analysis.md`](docs/competitive-analysis.md). **Your numbers will differ** — this is one machine, one configuration, one point in time.
+> **Method.** Groupy 2 v2.3.1 and TabNest 0.1.3, same machine (Windows 11 26100, x64, 24 logical cores), both idle for 20 seconds with no mouse or keyboard input. Memory and handles from the process table; CPU from `TotalProcessorTime` deltas; injection count by walking the module list of every readable process. Groupy figures are the sum of its resident processes (`GroupyCtrl` + `GroupySrv` + two helpers). TabNest figures are the median of four runs, reproducible with `TabNest.exe --benchmark`. Full data and method: [`docs/competitive-analysis.md`](docs/competitive-analysis.md). **Your numbers will differ** — this is one machine, one configuration, one point in time.
 
-| | **TabNest 0.1.2** | Groupy 2 (v2.3.1) |
+| | **TabNest 0.1.3** | Groupy 2 (v2.3.1) |
 |---|---|---|
 | License | **MIT, open source** | Commercial, closed source |
 | Price | **Free** | Paid |
 | **DLL injection into other processes** | **None** | 46 processes on the test machine |
-| Resident working set | **32.1 MB** | 78 MB |
+| Resident working set | **31.9 MB** | 78 MB |
 | Idle CPU, 20 s sample | 0.00–0.08% | 0.08% of one core |
-| Threads | **15** | 30 |
-| Handles | **343** | 706 |
+| Threads | **11** | 30 |
+| Handles | **344** | 706 |
 | Download size | **11.3 MB, single exe** | 24.6 MB installer |
 | Extra runtime needed | **None** | None |
 | Background service | **None** | Yes (`GroupySrv`) |
@@ -94,7 +94,7 @@ The only mature product in this category is **Stardock Groupy 2**. TabNest was b
 | Per-document and per-folder rules | No | **Yes** |
 | Tab hover previews | No | **Yes** |
 | Code signed | Not yet | **Yes** |
-| Maturity | 0.1.2 | Shipping since 2017 |
+| Maturity | 0.1.3 | Shipping since 2017 |
 
 **On the idle-CPU row: that is a tie, not a win.** 0.08% of one core over 20 seconds is 16 ms — one scheduler tick, which is the resolution floor of this measurement. Groupy lands on exactly the same 16 ms. Both tools are genuinely idle when idle, and neither can be shown to beat the other with this method. Reported here rather than quietly dropped, because an earlier version of this table claimed a difference that the data does not support.
 
@@ -118,17 +118,17 @@ The tradeoff is honest and it is not free: staying outside means TabNest cannot 
 From [Releases](../../releases) download either:
 
 - `TabNest.exe` — copy it anywhere and double-click. No runtime, no administrator rights.
-- `TabNest-0.1.2-setup.exe` — optional installer: Start-menu shortcut, launch-at-login, and a clean uninstall that asks the running instance to restore windows first.
+- `TabNest-0.1.3-setup.exe` — optional installer: Start-menu shortcut, launch-at-login, and a clean uninstall that asks the running instance to restore windows first.
 
 Settings and saved groups live in `%LOCALAPPDATA%\TabNest\` and survive uninstall.
 
 ### Unsigned builds
 
-**0.1.2 is not Authenticode-signed.** The publisher has not purchased an OV/EV code-signing certificate. That is a deliberate choice for this release, not a missing file in the zip.
+**0.1.3 is not Authenticode-signed.** The publisher has not purchased an OV/EV code-signing certificate. That is a deliberate choice for this release, not a missing file in the zip.
 
 What you may see, and what to do:
 
-1. **SmartScreen — "Windows protected your PC".** This is the usual warning for a new, unsigned download. Click **More info**, confirm the file name is `TabNest.exe` or `TabNest-0.1.2-setup.exe`, then **Run anyway**. The prompt is per file hash: it can appear once for the installer and again for the installed `TabNest.exe`.
+1. **SmartScreen — "Windows protected your PC".** This is the usual warning for a new, unsigned download. Click **More info**, confirm the file name is `TabNest.exe` or `TabNest-0.1.3-setup.exe`, then **Run anyway**. The prompt is per file hash: it can appear once for the installer and again for the installed `TabNest.exe`.
 2. **Antivirus quarantine or a "trojan" alert.** Unsigned window-management tools are a common false-positive class. Restore the file from quarantine if you trust the GitHub source. If your environment forbids unsigned binaries, do not run this build.
 3. **Corporate machines that block unsigned executables.** There is nothing to click through. You need a signed build, or an IT exception.
 
