@@ -1,3 +1,4 @@
+using TabNest.Core.Layout;
 using TabNest.Core.Models;
 using TabNest.Interop;
 
@@ -83,6 +84,8 @@ internal static class QuirkTestCommand
         failures += TestForegroundFightBreaker(orchestrator, windows);
         Console.WriteLine();
         failures += TestGroupCollapseToTaskbar(orchestrator, windows);
+        Console.WriteLine();
+        failures += TestGroupResizeFromRail(orchestrator, windows);
 
         orchestrator.DissolveEverything();
         PumpMessages(TimeSpan.FromMilliseconds(500));
@@ -270,6 +273,116 @@ internal static class QuirkTestCommand
             trespassers.Count == 0,
             "这些成员盖住了分组栏："
                 + string.Join("、", trespassers.Select(m => $"{m.Title} 顶边 {m.Bounds.Top}")));
+
+        orchestrator.DissolveEverything();
+        PumpMessages(TimeSpan.FromMilliseconds(800));
+
+        return failures;
+    }
+
+    /// <summary>
+    /// 拖动分组栏两端的手柄可以缩放整组，且缩不到无法操作的尺寸。
+    ///
+    /// 手柄必须**独占**分组栏最左／最右那一条：与菜单按钮或关闭按钮重叠的话，
+    /// 同一个位置既是"缩放"又是"打开菜单"，光标显示什么都是错的，
+    /// 而用户按下去会得到两种结果中他没想要的那个。
+    /// </summary>
+    private static int TestGroupResizeFromRail(
+        Orchestrator orchestrator, List<WindowInfo> harnessWindows)
+    {
+        Console.WriteLine("── 分组栏两端可缩放整组 ──");
+
+        var failures = 0;
+
+        var normals = harnessWindows
+            .Where(w => w.Title.Contains("普通窗口", StringComparison.Ordinal))
+            .ToList();
+
+        if (normals.Count < 2)
+        {
+            Console.WriteLine("[跳过] 需要两个「普通窗口」测试窗口。");
+            return failures;
+        }
+
+        orchestrator.MergeForTest(normals[0].Identity.Handle, normals[1].Identity.Handle);
+        PumpMessages(TimeSpan.FromSeconds(2));
+
+        var group = orchestrator.GroupsForTest.FirstOrDefault();
+
+        failures += Check("已建组", group is not null, "没有建出组");
+
+        if (group is null)
+        {
+            return failures;
+        }
+
+        // 手柄区域必须与按钮互不重叠。
+        var dpi = MonitorLookup.DpiForWindow(normals[0].Identity.Handle);
+        var metrics = new RailMetrics().ScaleTo(dpi);
+        var layout = TabRailLayoutEngine.Compute(
+            group.Tabs, group.ActiveTab!.Identity, group.Bounds, metrics);
+
+        var leftHandle = layout.ResizeLeft;
+        var rightHandle = layout.ResizeRight;
+
+        Console.WriteLine($"左手柄 {leftHandle}，右手柄 {rightHandle}，菜单按钮 {layout.MenuButton}");
+
+        failures += Check(
+            "两端手柄都存在",
+            leftHandle.Width > 0 && rightHandle.Width > 0,
+            "手柄宽度为 0，用户无处可拖");
+
+        failures += Check(
+            "手柄不与菜单按钮重叠",
+            layout.MenuButton.Width == 0 || layout.MenuButton.Left >= leftHandle.Right,
+            $"菜单按钮 {layout.MenuButton} 压在左手柄 {leftHandle} 上");
+
+        failures += Check(
+            "手柄不与关闭整组按钮重叠",
+            layout.CloseGroupButton.Width == 0
+                || layout.CloseGroupButton.Right <= rightHandle.Left,
+            $"关闭按钮 {layout.CloseGroupButton} 压在右手柄 {rightHandle} 上");
+
+        failures += Check(
+            "手柄区域不被当作拖动区",
+            !layout.IsDragArea(new PixelPoint(leftHandle.Left + 1, leftHandle.Top + 1))
+                && !layout.IsDragArea(new PixelPoint(rightHandle.Left + 1, rightHandle.Top + 1)),
+            "在手柄上按下会被当成整体移动，而不是缩放");
+
+        // 从右上角往右拖 120 像素：组该变宽 120。
+        var before = group.Bounds;
+
+        orchestrator.ResizeGroupForTest(group.Id, RailResizeCorner.TopRight, 120, 0);
+        orchestrator.ResizeGroupEndForTest(group.Id);
+        PumpMessages(TimeSpan.FromSeconds(2));
+
+        var widened = orchestrator.GroupsForTest.FirstOrDefault()?.Bounds ?? default;
+
+        Console.WriteLine($"缩放前 {before}，右上角右拖 120 后 {widened}");
+
+        failures += Check(
+            "右上角右拖使整组变宽",
+            widened.Width > before.Width + 100,
+            $"宽度 {before.Width} → {widened.Width}，预期增加约 120");
+
+        failures += Check(
+            "左边界没有随右上角缩放而移动",
+            Math.Abs(widened.Left - before.Left) <= 2,
+            $"左边界 {before.Left} → {widened.Left}，右上角缩放不该动它");
+
+        // 往回拖到远超最小尺寸：必须被夹住，而不是缩成一条线。
+        orchestrator.ResizeGroupForTest(group.Id, RailResizeCorner.TopRight, -100000, 0);
+        orchestrator.ResizeGroupEndForTest(group.Id);
+        PumpMessages(TimeSpan.FromSeconds(2));
+
+        var clamped = orchestrator.GroupsForTest.FirstOrDefault()?.Bounds ?? default;
+
+        Console.WriteLine($"极限回拖后 {clamped}");
+
+        failures += Check(
+            "缩放被最小尺寸夹住，没有缩成不可操作的一条",
+            clamped.Width >= 200,
+            $"宽度被缩到 {clamped.Width} —— 用户将既点不到标签也点不到按钮");
 
         orchestrator.DissolveEverything();
         PumpMessages(TimeSpan.FromMilliseconds(800));

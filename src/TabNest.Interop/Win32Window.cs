@@ -400,6 +400,29 @@ public abstract class Win32Window : IDisposable
 
         /// <summary>系统命令：最小化、还原、关闭等。任务栏按钮点击会走它。</summary>
         public const uint SysCommand = WindowClass.WM_SYSCOMMAND;
+
+        /// <summary>系统询问该显示什么光标。自定义光标必须在这里应答。</summary>
+        public const uint SetCursor = WindowClass.WM_SETCURSOR;
+    }
+
+    /// <summary>系统光标。缩放手柄要用对角箭头，否则用户不知道那里能拖。</summary>
+    public static class Cursors
+    {
+        private static nint _sizeNwse;
+        private static nint _sizeNesw;
+
+        /// <summary>左上—右下对角缩放。</summary>
+        public static nint SizeNwse => _sizeNwse != 0
+            ? _sizeNwse
+            : _sizeNwse = WindowClass.LoadCursor(0, WindowClass.IDC_SIZENWSE);
+
+        /// <summary>右上—左下对角缩放。</summary>
+        public static nint SizeNesw => _sizeNesw != 0
+            ? _sizeNesw
+            : _sizeNesw = WindowClass.LoadCursor(0, WindowClass.IDC_SIZENESW);
+
+        /// <summary>设置当前光标。仅在 WM_SETCURSOR 中调用才有效。</summary>
+        public static void Set(nint cursor) => WindowClass.SetCursor(cursor);
     }
 
     /// <summary>

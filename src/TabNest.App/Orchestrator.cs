@@ -646,6 +646,14 @@ internal sealed class Orchestrator : IDisposable
         public long SuppressedUntil;
     }
 
+    /// <summary>
+    /// 缩放时组矩形的最小边长（物理像素）。
+    ///
+    /// 不夹住的话用户能把整组拖成零宽零高，分组栏与所有成员一起缩成一条线，
+    /// 之后既点不到标签也点不到按钮，只能去托盘拆散分组。
+    /// </summary>
+    private const int MinimumGroupSize = 240;
+
     /// <summary>一秒内由前台事件驱动的活动标签切换超过这个次数，判定为对抗。</summary>
     private const int ForegroundFlipThreshold = 8;
 
@@ -1352,6 +1360,20 @@ internal sealed class Orchestrator : IDisposable
     /// </summary>
     internal void ForegroundChangedForTest(nint hwnd) => OnForegroundChanged(hwnd);
 
+    /// <summary>测试入口：拖动分组栏某一端的缩放手柄。</summary>
+    internal void ResizeGroupForTest(
+        string groupId, RailResizeCorner corner, int deltaX, int deltaY) =>
+        ResizeGroup(groupId, corner, deltaX, deltaY);
+
+    /// <summary>测试入口：缩放结束（松手）。</summary>
+    internal void ResizeGroupEndForTest(string groupId)
+    {
+        if (_liftedGroupId == groupId)
+        {
+            SettleGroup(groupId, _liftAuthority);
+        }
+    }
+
     /// <summary>测试入口：点分组栏的最小化按钮。</summary>
     internal void MinimizeGroupForTest(string groupId) => CollapseGroup(groupId);
 
@@ -1508,6 +1530,22 @@ internal sealed class Orchestrator : IDisposable
         }
 
         if (interaction.Action is RailAction.MoveGroupEnd)
+        {
+            if (_liftedGroupId == groupId)
+            {
+                SettleGroup(groupId, _liftAuthority);
+            }
+
+            return;
+        }
+
+        if (interaction.Action is RailAction.ResizeGroup)
+        {
+            ResizeGroup(groupId, interaction.ResizeCorner, interaction.DeltaX, interaction.DeltaY);
+            return;
+        }
+
+        if (interaction.Action is RailAction.ResizeGroupEnd)
         {
             if (_liftedGroupId == groupId)
             {
@@ -1690,6 +1728,88 @@ internal sealed class Orchestrator : IDisposable
 
         RefreshRail(group);
         PersistSession();
+    }
+
+    /// <summary>
+    /// 拖动分组栏两端的手柄缩放整组。
+    ///
+    /// 与 <see cref="MoveGroup"/> 同一套提起—落位模型：首次移动时把整组提起，
+    /// 拖动期间只有活动成员实时跟随、其余成员停靠屏外，松手（ResizeGroupEnd）再落位。
+    /// 不这么做的话，往同一进程的多个窗口高频投递重排会把对方的 UI 线程塞满，
+    /// 缩放一顿一顿 —— 与拖动标题栏是同一个病根。
+    /// </summary>
+    private void ResizeGroup(string groupId, RailResizeCorner corner, int deltaX, int deltaY)
+    {
+        var group = _manager.FindGroup(groupId);
+
+        if (group is null || group.Bounds.IsEmpty)
+        {
+            return;
+        }
+
+        if (_liftedGroupId is null)
+        {
+            var authority = group.ActiveTab?.Identity.Handle ?? 0;
+
+            if (authority == 0)
+            {
+                return;
+            }
+
+            LiftGroup(group, authority);
+        }
+
+        if (_liftedGroupId != groupId)
+        {
+            return;
+        }
+
+        var bounds = group.Bounds;
+
+        // 顶边两个角都会同时改变高度：分组栏贴在窗口顶边，
+        // 往上拖手柄就该把整组变高，与拖窗口上边框一致。
+        var top = bounds.Top + deltaY;
+        var left = corner is RailResizeCorner.TopLeft ? bounds.Left + deltaX : bounds.Left;
+        var right = corner is RailResizeCorner.TopRight ? bounds.Right + deltaX : bounds.Right;
+
+        // 夹住最小尺寸。不夹的话用户可以把组拖成零宽零高，
+        // 之后分组栏与所有成员一起缩成一条线，再也点不到任何东西。
+        var minimum = MinimumGroupSize;
+
+        if (right - left < minimum)
+        {
+            if (corner is RailResizeCorner.TopLeft)
+            {
+                left = right - minimum;
+            }
+            else
+            {
+                right = left + minimum;
+            }
+        }
+
+        if (bounds.Bottom - top < minimum)
+        {
+            top = bounds.Bottom - minimum;
+        }
+
+        var resized = new PixelRect(left, top, right, bounds.Bottom);
+
+        var result = _manager.SetGroupBounds(groupId, resized);
+
+        if (!result.Success || result.Group is null)
+        {
+            return;
+        }
+
+        // 拖动期间只动权威成员，其余成员停在屏外等落位 —— 提起状态的意义就在这里。
+        if (result.Group.ActiveTab is { } active)
+        {
+            _ = _controller.ExecuteAsync(
+                new Core.Grouping.AlignWindowAction(active.Identity, resized));
+        }
+
+        RefreshRail(result.Group);
     }
 
     /// <summary>

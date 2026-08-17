@@ -62,8 +62,47 @@ internal static partial class Gdi
     [LibraryImport(Gdi32, SetLastError = true)]
     public static partial nint CreateCompatibleDC(nint hdc);
 
+    /// <summary>读一个像素的颜色。返回 CLR_INVALID (0xFFFFFFFF) 表示坐标不可读。</summary>
+    [LibraryImport(Gdi32)]
+    public static partial uint GetPixel(nint hdc, int x, int y);
+
     [LibraryImport(Gdi32, SetLastError = true)]
     public static partial nint CreateCompatibleBitmap(nint hdc, int cx, int cy);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAPINFOHEADER
+    {
+        public uint biSize;
+        public int biWidth;
+        public int biHeight;
+        public ushort biPlanes;
+        public ushort biBitCount;
+        public uint biCompression;
+        public uint biSizeImage;
+        public int biXPelsPerMeter;
+        public int biYPelsPerMeter;
+        public uint biClrUsed;
+        public uint biClrImportant;
+    }
+
+    public const uint BI_RGB = 0;
+    public const uint DIB_RGB_COLORS = 0;
+
+    /// <summary>
+    /// 创建可直接访问像素的 32 位位图。
+    ///
+    /// 分层窗口需要逐像素 alpha，而 CreateCompatibleBitmap 给不出可写的 alpha 通道 ——
+    /// 必须用 DIB section 拿到裸内存，绘制完再自己填 alpha。
+    /// biHeight 传负值表示自上而下排列，与屏幕坐标一致，省去逐行翻转。
+    /// </summary>
+    [LibraryImport(Gdi32, SetLastError = true)]
+    public static partial nint CreateDIBSection(
+        nint hdc,
+        in BITMAPINFOHEADER pbmi,
+        uint usage,
+        out nint ppvBits,
+        nint hSection,
+        uint offset);
 
     [LibraryImport(Gdi32, SetLastError = true)]
     public static partial nint SelectObject(nint hdc, nint h);

@@ -17,6 +17,9 @@ public sealed record RailInteraction
     public int DeltaX { get; init; }
 
     public int DeltaY { get; init; }
+
+    /// <summary>缩放动作对应的角。</summary>
+    public RailResizeCorner ResizeCorner { get; init; }
 }
 
 public enum RailAction
@@ -37,6 +40,12 @@ public enum RailAction
     /// 点击了分组栏的最小化按钮：整组收起到任务栏上的单个 TabNest 图标。
     /// </summary>
     MinimizeGroup,
+
+    /// <summary>正在拖动分组栏两端的手柄缩放整组。</summary>
+    ResizeGroup,
+
+    /// <summary>缩放结束（松手或捕获丢失）。</summary>
+    ResizeGroupEnd,
 
     /// <summary>
     /// 双击了分组栏的空白处：切换整组的全屏。
@@ -89,6 +98,11 @@ internal sealed class TabRailWindow : Win32Window
     private bool _isMovingGroup;
     private PixelPoint _lastGroupDragPoint;
 
+    /// <summary>正在拖动缩放手柄时对应的角，null 表示当前不在缩放。</summary>
+    private RailResizeCorner? _resizingCorner;
+
+    private PixelPoint _lastResizePoint;
+
     private nint _owner;
 
     public TabRailWindow(string groupId, Action<RailInteraction> onInteraction)
@@ -140,17 +154,13 @@ internal sealed class TabRailWindow : Win32Window
             PlaceBelow(_owner);
         }
 
-        // 尺寸或圆角变化后才重设区域：SetWindowRgn 会触发重绘，每帧都调用会闪。
-        var bounds = state.Layout.Bounds;
-        var radius = state.Layout.TopCornerRadius;
-
-        if (previous is null
-            || previous.Layout.Bounds.Width != bounds.Width
-            || previous.Layout.Bounds.Height != bounds.Height
-            || previous.Layout.TopCornerRadius != radius)
-        {
-            ApplyTopRoundedRegion(bounds.Width, bounds.Height, radius);
-        }
+        // 圆角成形交给分层窗口的逐像素 alpha，**不再用 SetWindowRgn**。
+        //
+        // 区域是二值掩码：一个像素要么完全属于窗口、要么完全不属于，圆弧只能是
+        // 硬像素阶梯 —— 那正是用户看到的"左右两个上角有锯齿"。区域无法抗锯齿，
+        // 换画法也没用，只能换成形方式。
+        _ = previous;
+        LayeredSurface.EnableLayered(Handle);
 
         Invalidate();
     }
@@ -179,6 +189,18 @@ internal sealed class TabRailWindow : Win32Window
             // 背景由我们自己填满，让系统再擦一次只会造成闪烁。
             case Messages.EraseBackground:
                 return 1;
+
+            case Messages.SetCursor:
+                // 缩放手柄上必须换成对角箭头，否则用户不知道那里能拖。
+                // 只在光标位于客户区时应答（lParam 低字是命中测试码，HTCLIENT = 1）；
+                // 其他区域交回系统，免得连边框光标一起改掉。
+                if ((lParam.ToInt64() & 0xFFFF) == 1 && CursorForPointer() is { } cursor)
+                {
+                    Cursors.Set(cursor);
+                    return 1;
+                }
+
+                return null;
 
             case Messages.MouseMove:
                 OnMouseMove(ToPoint(lParam));
@@ -221,9 +243,69 @@ internal sealed class TabRailWindow : Win32Window
     // 鼠标交互
     // ------------------------------------------------------------------
 
+    /// <summary>
+    /// 光标此刻该显示成什么。返回 null 表示用默认箭头。
+    ///
+    /// 缩放进行中一律沿用起始那个角的光标：拖动时光标会离开手柄区域，
+    /// 若按位置重算，光标会在拖的过程中变回箭头，手感很怪。
+    /// </summary>
+    private nint? CursorForPointer()
+    {
+        var corner = _resizingCorner;
+
+        if (corner is null)
+        {
+            if (_state is not { } state || !CursorPosition.TryGet(out var sx, out var sy))
+            {
+                return null;
+            }
+
+            var bounds = ActualBounds;
+            corner = state.Layout.HitTestResize(
+                new PixelPoint(sx - bounds.Left, sy - bounds.Top));
+        }
+
+        return corner switch
+        {
+            RailResizeCorner.TopLeft => Cursors.SizeNwse,
+            RailResizeCorner.TopRight => Cursors.SizeNesw,
+            _ => null,
+        };
+    }
+
     private void OnMouseMove(PixelPoint point)
     {
         EnsureMouseTracking();
+
+        // 缩放优先于其他一切拖动判定。
+        if (_resizingCorner is { } resizing)
+        {
+            if (!CursorPosition.TryGet(out var rx, out var ry))
+            {
+                return;
+            }
+
+            var dx = rx - _lastResizePoint.X;
+            var dy = ry - _lastResizePoint.Y;
+
+            if (dx == 0 && dy == 0)
+            {
+                return;
+            }
+
+            _lastResizePoint = new PixelPoint(rx, ry);
+
+            _onInteraction(new RailInteraction
+            {
+                GroupId = GroupId,
+                Action = RailAction.ResizeGroup,
+                ResizeCorner = resizing,
+                DeltaX = dx,
+                DeltaY = dy,
+            });
+
+            return;
+        }
 
         if (_state is not { } state)
         {
@@ -337,6 +419,22 @@ internal sealed class TabRailWindow : Win32Window
             return;
         }
 
+        // 缩放手柄：按下即进入缩放，与拖窗口边框的手感一致。
+        if (state.Layout.HitTestResize(point) is { } corner)
+        {
+            if (CursorPosition.TryGet(out var rx, out var ry))
+            {
+                _resizingCorner = corner;
+                _lastResizePoint = new PixelPoint(rx, ry);
+                _isPressed = false;
+                _isDragging = false;
+                _isMovingGroup = false;
+                CaptureMouse();
+            }
+
+            return;
+        }
+
         // 关闭整组按钮在松手时才触发，避免误按下即关掉一整组窗口。
         if (state.Layout.CloseGroupButton.Width > 0
             && state.Layout.CloseGroupButton.Contains(point))
@@ -385,6 +483,16 @@ internal sealed class TabRailWindow : Win32Window
 
     private void OnMouseUp(PixelPoint point)
     {
+        // 缩放的收尾必须最先处理，且与其他分支互斥 ——
+        // 缩放期间既不是"点了标签"也不是"移动整组"。
+        if (_resizingCorner is not null)
+        {
+            _resizingCorner = null;
+            ReleaseMouseCapture();
+            Emit(RailAction.ResizeGroupEnd, default);
+            return;
+        }
+
         if (_state is not { } state)
         {
             return;
@@ -465,6 +573,13 @@ internal sealed class TabRailWindow : Win32Window
     /// </summary>
     private void OnCaptureLost()
     {
+        // 缩放被打断也必须收尾落位，否则组矩形停在中途、成员还没对齐过来。
+        if (_resizingCorner is not null)
+        {
+            _resizingCorner = null;
+            Emit(RailAction.ResizeGroupEnd, default);
+        }
+
         var wasMovingGroup = _isMovingGroup;
 
         _isPressed = false;

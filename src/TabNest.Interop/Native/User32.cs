@@ -156,6 +156,40 @@ internal static partial class User32
     [LibraryImport(Lib, EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
     public static partial nint GetWindowLongPtr(nint hWnd, int nIndex);
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BLENDFUNCTION
+    {
+        public byte BlendOp;
+        public byte BlendFlags;
+        public byte SourceConstantAlpha;
+        public byte AlphaFormat;
+    }
+
+    public const byte AC_SRC_OVER = 0x00;
+    public const byte AC_SRC_ALPHA = 0x01;
+    public const uint ULW_ALPHA = 0x00000002;
+
+    /// <summary>
+    /// 用一幅带 alpha 的位图更新分层窗口。
+    ///
+    /// 这是让窗口边缘抗锯齿的唯一途径：SetWindowRgn 的区域是二值掩码，
+    /// 圆角只能是硬像素阶梯；而分层窗口按逐像素 alpha 与桌面混合，
+    /// 半覆盖的边缘像素得以半透明呈现。
+    /// 源位图必须是**预乘 alpha**。
+    /// </summary>
+    [LibraryImport(Lib, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool UpdateLayeredWindow(
+        nint hWnd,
+        nint hdcDst,
+        in POINT pptDst,
+        in SIZE psize,
+        nint hdcSrc,
+        in POINT pptSrc,
+        uint crKey,
+        in BLENDFUNCTION pblend,
+        uint dwFlags);
+
     [LibraryImport(Lib, EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     public static partial nint SetWindowLongPtr(nint hWnd, int nIndex, nint dwNewLong);
 

@@ -31,6 +31,14 @@ internal struct POINT
     public readonly PixelPoint ToPixelPoint() => new(X, Y);
 }
 
+/// <summary>Win32 SIZE。UpdateLayeredWindow 用它传位图尺寸。</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct SIZE
+{
+    public int Width;
+    public int Height;
+}
+
 /// <summary>WM_GETMINMAXINFO 的载荷。用于给可缩放窗口设最小尺寸。</summary>
 [StructLayout(LayoutKind.Sequential)]
 internal struct MINMAXINFO

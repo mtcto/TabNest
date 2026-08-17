@@ -57,6 +57,17 @@ internal static partial class WindowClass
 
     public const int IDC_ARROW = 32512;
 
+    /// <summary>左上—右下方向的对角缩放光标。</summary>
+    public const int IDC_SIZENWSE = 32642;
+
+    /// <summary>右上—左下方向的对角缩放光标。</summary>
+    public const int IDC_SIZENESW = 32643;
+
+    public const uint WM_SETCURSOR = 0x0020;
+
+    [LibraryImport(Lib, SetLastError = true)]
+    public static partial nint SetCursor(nint hCursor);
+
     public const uint TME_LEAVE = 0x00000002;
 
     [StructLayout(LayoutKind.Sequential)]

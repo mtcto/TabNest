@@ -65,10 +65,34 @@ internal static class RailRenderer
     private const int TabCornerRadius = 6;
     private const int AccentBarWidth = 3;
 
+    /// <summary>
+    /// 绘制分组栏。
+    ///
+    /// 走分层窗口（逐像素 alpha）而不是 <c>SetWindowRgn</c>：区域是二值掩码，
+    /// 圆角只能是硬像素阶梯，用户看到的就是左右两个上角有锯齿，而区域**无法**抗锯齿。
+    /// 分层窗口按 alpha 与桌面混合，半覆盖的边缘像素得以半透明呈现。
+    /// 分层表面创建失败时退回普通绘制 —— 宁可有锯齿，也不能不画。
+    /// </summary>
     public static void Paint(nint hwnd, RailRenderState state)
     {
         var width = state.Layout.Bounds.Width;
         var height = state.Layout.Bounds.Height;
+
+        using var layered = LayeredSurface.Begin(
+            hwnd, width, height, state.Layout.TopCornerRadius);
+
+        if (layered is not null)
+        {
+            PaintContent(layered.Canvas, state, width, height);
+
+            if (layered.Commit())
+            {
+                // 分层窗口的内容由 UpdateLayeredWindow 提交，但 WM_PAINT 仍需被认领，
+                // 否则系统会认为这块无效区域没被处理，反复投递重绘。
+                MarkPainted(hwnd);
+                return;
+            }
+        }
 
         using var paint = BufferedPaint.Begin(hwnd, width, height);
         if (paint is null)
@@ -76,8 +100,18 @@ internal static class RailRenderer
             return;
         }
 
-        var canvas = paint.Canvas;
+        PaintContent(paint.Canvas, state, width, height);
+    }
 
+    private static void MarkPainted(nint hwnd)
+    {
+        using var paint = BufferedPaint.Begin(hwnd, 1, 1);
+        _ = paint;
+    }
+
+    private static void PaintContent(
+        GdiCanvas canvas, RailRenderState state, int width, int height)
+    {
         // 背景条关掉时也必须填满，否则 GDI 会留下上一帧的残像 ——
         // 只是填成与窗口同色，视觉上标签像直接浮在窗口上方。
         canvas.FillRect(
