@@ -10,7 +10,7 @@
 ; 不需要 VC++ 运行库，用户双击装完即用。
 
 #define AppName "TabNest"
-#define AppVersion "0.1.3"
+#define AppVersion "0.1.4"
 #define AppPublisher "TabNest Contributors"
 #define AppExeName "TabNest.exe"
 
