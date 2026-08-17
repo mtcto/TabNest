@@ -71,7 +71,7 @@ internal static class Program
 
     private static int RunInteractive(RunMode mode)
     {
-        _ = mode;
-        return InteractiveHost.Run();
+        ArgumentNullException.ThrowIfNull(mode);
+        return InteractiveHost.Run(mode.Verbose);
     }
 }

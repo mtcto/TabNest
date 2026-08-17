@@ -59,10 +59,12 @@ internal sealed class InteractiveHost : IDisposable
         _tray.MenuItemClicked += OnMenuItemClicked;
     }
 
-    public static int Run()
+    public static int Run(bool verbose = false)
     {
         AppPaths.EnsureCreated();
-        FileLog.Initialize(AppPaths.LogDirectory);
+        FileLog.Initialize(
+            AppPaths.LogDirectory,
+            verbose ? LogLevel.Debug : LogLevel.Info);
 
         // 单实例：两个 TabNest 同时管理窗口会互相争抢焦点和位置，
         // 后果是用户窗口在两者之间来回跳。

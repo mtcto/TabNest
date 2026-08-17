@@ -77,6 +77,10 @@ internal static class QuirkTestCommand
         failures += TestBatchAdoption(orchestrator, windows);
         Console.WriteLine();
         failures += TestDistinctAppIdAutoGroup(orchestrator, windows);
+        Console.WriteLine();
+        failures += TestMinimizedMemberIsIgnored(orchestrator, windows);
+        Console.WriteLine();
+        failures += TestForegroundFightBreaker(orchestrator, windows);
 
         orchestrator.DissolveEverything();
         PumpMessages(TimeSpan.FromMilliseconds(500));
@@ -264,6 +268,236 @@ internal static class QuirkTestCommand
             trespassers.Count == 0,
             "这些成员盖住了分组栏："
                 + string.Join("、", trespassers.Select(m => $"{m.Title} 顶边 {m.Bounds.Top}")));
+
+        orchestrator.DissolveEverything();
+        PumpMessages(TimeSpan.FromMilliseconds(800));
+
+        return failures;
+    }
+
+    /// <summary>
+    /// 应用与 TabNest 抢焦点时必须熔断，而不是陪它无限对抗。
+    ///
+    /// 用户机器现场抓取（2026-08-17 11:46）：VS Code 的「open in agents」弹出一个
+    /// 窗口，被自动分组收进组，随后 VS Code 要让弹窗保持焦点、TabNest 要让当前标签
+    /// 保持焦点，两边**每秒对抗 22 轮**（日志里两个句柄各被激活 124 次），
+    /// 屏幕疯狂闪烁，用户只能强杀应用。
+    ///
+    /// 挡不住它进组：实测那个弹窗与真正的编辑器窗口在系统层面逐位相同
+    /// （style=0x14C70000、exstyle=0x00200100、无属主、可最大化可缩放），
+    /// 从进程外没有任何判据能区分。所以只能熔断对抗本身。
+    /// </summary>
+    private static int TestForegroundFightBreaker(
+        Orchestrator orchestrator, List<WindowInfo> harnessWindows)
+    {
+        Console.WriteLine("── 焦点对抗必须熔断 ──");
+
+        var failures = 0;
+
+        var normals = harnessWindows
+            .Where(w => w.Title.Contains("普通窗口", StringComparison.Ordinal))
+            .ToList();
+
+        if (normals.Count < 2)
+        {
+            Console.WriteLine("[跳过] 需要两个「普通窗口」测试窗口。");
+            return failures;
+        }
+
+        var a = normals[0].Identity.Handle;
+        var b = normals[1].Identity.Handle;
+
+        orchestrator.MergeForTest(a, b);
+        PumpMessages(TimeSpan.FromSeconds(2));
+
+        var group = orchestrator.GroupsForTest.FirstOrDefault();
+
+        failures += Check("已建组", group is not null, "没有建出组");
+
+        if (group is null)
+        {
+            return failures;
+        }
+
+        failures += Check(
+            "正常状态下没有被熔断",
+            !orchestrator.IsForegroundSuppressedForTest(group.Id),
+            "刚建组就被判定为对抗 —— 阈值太敏感，正常使用会被误伤");
+
+        // 模拟应用与我们抢焦点：两个成员之间高频交替上前台。
+        // 实测的真实频率是每秒 22 次，这里打 30 次远超阈值。
+        for (var i = 0; i < 30; i++)
+        {
+            orchestrator.ForegroundChangedForTest(i % 2 == 0 ? a : b);
+        }
+
+        failures += Check(
+            "高频焦点抢夺被熔断",
+            orchestrator.IsForegroundSuppressedForTest(group.Id),
+            "连续 30 次交替抢焦点仍未熔断 —— 用户会看到屏幕无限闪烁，只能强杀应用");
+
+        orchestrator.DissolveEverything();
+        PumpMessages(TimeSpan.FromMilliseconds(800));
+
+        return failures;
+    }
+
+    /// <summary>
+    /// 最小化的成员必须被布局系统**完全无视**，且事后能从任务栏调回来。
+    ///
+    /// 用户报告：最小化组里的某个窗口后，点任务栏图标再也调不回来，
+    /// 只有拆散分组才能还原。根因由用户机器上的现场抓取确证：窗口最小化后
+    /// 短暂地**仍是前台**（iconic=1 且 fg=1），位置同步据此读它的矩形 ——
+    /// 而那是 (-31989,-32000) 的图标占位符 —— 把组矩形写到屏幕外，
+    /// 此后每一批对齐都把全组摆到 -32000。
+    ///
+    /// 修复是三道**被动**守卫：位置同步无视最小化成员；指令过滤掉对最小化
+    /// 窗口的摆位/压层/激活；对齐拒绝最小化窗口。刻意**没有**任何主动行为
+    /// （整组收起/整组恢复都实现过）：靠响应事件做批量窗口操作会与系统的
+    /// 激活逻辑互相触发，实测振荡到死循环，用户被迫强杀进程。
+    ///
+    /// 注意：触发条件"最小化但仍是前台"在 WPF 窗口上不出现，本节抓不到
+    /// 原缺陷本身（撤掉守卫照样绿），守着的是各守卫的可观测结果。
+    /// </summary>
+    private static int TestMinimizedMemberIsIgnored(
+        Orchestrator orchestrator, List<WindowInfo> harnessWindows)
+    {
+        Console.WriteLine("── 最小化的成员被布局无视，且能从任务栏调回来 ──");
+
+        var failures = 0;
+
+        var normals = harnessWindows
+            .Where(w => w.Title.Contains("普通窗口", StringComparison.Ordinal))
+            .ToList();
+
+        if (normals.Count < 2)
+        {
+            Console.WriteLine("[跳过] 需要两个「普通窗口」测试窗口。");
+            return failures;
+        }
+
+        var victim = normals[0].Identity.Handle;
+        var other = normals[1].Identity.Handle;
+
+        orchestrator.MergeForTest(victim, other);
+        PumpMessages(TimeSpan.FromSeconds(2));
+
+        var group = orchestrator.GroupsForTest.FirstOrDefault();
+
+        failures += Check("已建组", group is not null, "没有建出组");
+
+        if (group is null)
+        {
+            return failures;
+        }
+
+        var workArea = MonitorLookup.ForWindow(victim).WorkArea;
+
+        // 真实动作 + 泵消息，让真实事件流过 —— 不手工调处理函数。
+        WindowEnumerator.Minimize(victim);
+        PumpMessages(TimeSpan.FromSeconds(3));
+
+        failures += Check(
+            "窗口确实被最小化了",
+            WindowEnumerator.IsMinimized(victim),
+            "窗口没有进入最小化状态，本节其余结论不成立");
+
+        failures += Check(
+            "最小化之后待得住（没有任何东西把它拽回来）",
+            WindowEnumerator.IsMinimized(victim),
+            "窗口被自动恢复了 —— 有主动行为在和系统打架");
+
+        // 分组栏不得因为"当前标签是最小化窗口"而消失。
+        //
+        // 被最小化的正是刚合并时的活动标签，模型还认它当家。分组栏若跟着去锚定
+        // 它的实际矩形，读到的是 (-31989,-32000) 的图标占位符，整条分组栏
+        // 飞出屏幕 —— 用户看到的就是"点了标签，分组栏没了"。
+        var railDuringMinimize = orchestrator.GroupsForTest.FirstOrDefault() is { } g1
+            ? orchestrator.GetRailForTest(g1.Id)
+            : null;
+
+        var railBounds = railDuringMinimize?.ActualBounds ?? default;
+
+        failures += Check(
+            "当前标签最小化时分组栏仍在屏幕上",
+            railDuringMinimize is { IsVisible: true }
+                && railBounds.Right > workArea.Left && railBounds.Left < workArea.Right
+                && railBounds.Bottom > workArea.Top && railBounds.Top < workArea.Bottom,
+            $"分组栏 {railBounds}（可见={railDuringMinimize?.IsVisible}）—— 已消失或飞出屏幕");
+
+        // 最小化期间制造一轮布局（切一次标签），组矩形必须不被屏外坐标污染。
+        if (orchestrator.GroupsForTest.FirstOrDefault() is { } live
+            && live.LiveTabs.FirstOrDefault(t => t.Identity.Handle == other) is { } otherTab)
+        {
+            orchestrator.ActivateTabForTest(live.Id, otherTab.Identity);
+            PumpMessages(TimeSpan.FromSeconds(2));
+        }
+
+        var groupBounds = orchestrator.GroupsForTest.FirstOrDefault()?.Bounds ?? default;
+
+        Console.WriteLine($"最小化期间的组矩形 {groupBounds}");
+
+        failures += Check(
+            "组矩形没有被最小化窗口的坐标带到屏幕外",
+            groupBounds.IsEmpty
+                || (groupBounds.Right > workArea.Left && groupBounds.Left < workArea.Right
+                    && groupBounds.Bottom > workArea.Top && groupBounds.Top < workArea.Bottom),
+            $"组矩形变成了 {groupBounds}，与工作区 {workArea} 没有交集 —— "
+                + "整组已被写死在屏幕外，之后无论怎么恢复都看不见");
+
+        // 用户报的确切手势：**点击已最小化成员的标签**，窗口必须被调出来。
+        // 曾把最小化窗口的激活也过滤掉，结果点标签毫无反应，模型却切了当前标签，
+        // 分组栏跟着锚到最小化窗口上直接消失。
+        if (orchestrator.GroupsForTest.FirstOrDefault() is { } g2
+            && g2.Tabs.FirstOrDefault(t => t.Identity.Handle == victim) is { } victimTab)
+        {
+            orchestrator.ActivateTabForTest(g2.Id, victimTab.Identity);
+            PumpMessages(TimeSpan.FromSeconds(3));
+        }
+
+        failures += Check(
+            "点击标签后窗口退出最小化",
+            !WindowEnumerator.IsMinimized(victim),
+            "点了最小化成员的标签，窗口没有被调出来");
+
+        // 点击之后分组栏必须还在屏幕上。
+        //
+        // 这是承重断言：模型此刻已把最小化成员设为当前标签，分组栏若去锚定
+        // 它的实际矩形就会飞出屏幕。上面那条"最小化时分组栏仍在"放得太早，
+        // 撤销验证表明它单独抓不到 —— 消失发生在点击这一刻。
+        var railAfterClick = orchestrator.GroupsForTest.FirstOrDefault() is { } g3
+            ? orchestrator.GetRailForTest(g3.Id)
+            : null;
+
+        var railAfterBounds = railAfterClick?.ActualBounds ?? default;
+
+        failures += Check(
+            "点击标签后分组栏仍在屏幕上",
+            railAfterClick is { IsVisible: true }
+                && railAfterBounds.Right > workArea.Left && railAfterBounds.Left < workArea.Right
+                && railAfterBounds.Bottom > workArea.Top && railAfterBounds.Top < workArea.Bottom,
+            $"分组栏 {railAfterBounds}（可见={railAfterClick?.IsVisible}）—— 点标签把分组栏点没了");
+
+        var bounds = WindowEnumerator.ReadVisibleBounds(victim);
+
+        Console.WriteLine($"工作区 {workArea}，恢复后的窗口 {bounds}");
+
+        failures += Check(
+            "恢复后的窗口在屏幕可见范围内",
+            !bounds.IsEmpty
+                && bounds.Right > workArea.Left && bounds.Left < workArea.Right
+                && bounds.Bottom > workArea.Top && bounds.Top < workArea.Bottom,
+            $"窗口落在 {bounds} —— 用户点任务栏看起来毫无反应，实际是窗口在屏幕外");
+
+        // 成员矩形完全相同，被压在下面等于看不见 —— 必须断言 Z 序。
+        var order = WindowEnumerator.TopLevelZOrder();
+        var victimZ = order.IndexOf(victim);
+        var otherZ = order.IndexOf(other);
+
+        failures += Check(
+            "被调回来的窗口位于组员之上",
+            victimZ >= 0 && (otherZ < 0 || victimZ < otherZ),
+            $"被调回的窗口 Z 序 {victimZ}，组员 {otherZ} —— 它被组员盖住了");
 
         orchestrator.DissolveEverything();
         PumpMessages(TimeSpan.FromMilliseconds(800));

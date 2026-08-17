@@ -169,6 +169,11 @@ internal sealed class Orchestrator : IDisposable
                 OnForegroundChanged(evt.Handle);
                 break;
 
+            case WindowEventKind.MinimizeStart:
+            case WindowEventKind.MinimizeEnd:
+                OnMinimizeStateChanged(evt.Handle);
+                break;
+
             default:
                 break;
         }
@@ -387,6 +392,24 @@ internal sealed class Orchestrator : IDisposable
     /// </summary>
     private void SyncGroupToMember(GroupSession group, nint memberHandle)
     {
+        // 绝不拿最小化窗口的矩形当依据。
+        //
+        // 这是"最小化组内窗口后，从任务栏再也调不回来"的根因，由用户机器上的
+        // 现场抓取确证（2026-08-14 16:08:22）：窗口最小化之后有一小段时间
+        // **仍然是前台窗口**（监控记录 iconic=1 且 fg=1），于是下方的前台判定放行，
+        // 读到的却是最小化窗口的图标占位矩形 (-31989,-32000)。它被当成
+        // "用户把组拖到了那里"写进组矩形，此后每一批对齐都把所有成员摆到
+        // -32000 —— 窗口从任务栏恢复了、也被对齐了，就是在屏幕外，
+        // 只有拆散分组走快照还原才能回来。
+        //
+        // 注意：不要在这里"帮"最小化窗口做任何事（批量收起、批量恢复都试过）——
+        // 靠响应事件做批量窗口操作会与系统自己的激活逻辑互相触发，实测振荡到死循环。
+        // 忽略，是唯一稳定的处理。
+        if (WindowEnumerator.IsMinimized(memberHandle))
+        {
+            return;
+        }
+
         // 组处于提起状态时，只有权威成员的位置可信。
         // 其他成员的位置事件是停靠动作自己的回声（坐标在屏外），
         // 拿它们更新组矩形会让分组栏跟着飞出屏幕。
@@ -603,6 +626,37 @@ internal sealed class Orchestrator : IDisposable
     private long _lastDropProbeTicks;
 
     /// <summary>
+    /// 焦点对抗熔断器的每组状态。
+    ///
+    /// TabNest 跟随前台窗口切换活动标签（Alt+Tab 之后分组栏要保持一致），
+    /// 而应用也在管理自己的焦点。两边会顶起来：应用把焦点给它新开的窗口，
+    /// 我们跟着把那个窗口设为当前标签、把其余成员压下去，应用又把焦点抢回去 ——
+    /// 实测每秒 22 轮，屏幕疯狂闪烁，用户只能强杀进程。
+    ///
+    /// 触发场景（用户机器现场抓取，2026-08-17 11:46）：VS Code 的「open in agents」
+    /// 弹出一个窗口被自动分组收进组，随后与 VS Code 自己的焦点管理对抗。
+    /// 那个窗口与真正的编辑器窗口在系统层面**逐位相同**
+    /// （style=0x14C70000、exstyle=0x00200100、无属主、可最大化可缩放），
+    /// 从进程外无法区分，因此挡不住它进组 —— 只能挡住对抗本身。
+    /// </summary>
+    private sealed class ForegroundFlipState
+    {
+        public long WindowStart;
+        public int Count;
+        public long SuppressedUntil;
+    }
+
+    /// <summary>一秒内由前台事件驱动的活动标签切换超过这个次数，判定为对抗。</summary>
+    private const int ForegroundFlipThreshold = 8;
+
+    private const long ForegroundFlipWindowMs = 1000;
+
+    /// <summary>熔断后暂停跟随前台的时长，足够让应用自己把焦点定下来。</summary>
+    private const long ForegroundSuppressMs = 3000;
+
+    private readonly Dictionary<string, ForegroundFlipState> _foregroundFlips = [];
+
+    /// <summary>
     /// 屏外停靠的 X 坐标，与系统停靠最小化窗口的传统位置一致，远离一切可见显示器。
     /// </summary>
     private const int ParkedLeft = -32000;
@@ -669,6 +723,11 @@ internal sealed class Orchestrator : IDisposable
     /// </summary>
     private void SettleGroup(string groupId, nint authority)
     {
+        // 落位必须留痕，且记在这里而不是各调用点。LiftGroup 记日志而部分落位
+        // 路径不记，曾让日志呈现"提起 8 次落位 3 次"的假泄漏，把排查引向歧途 ——
+        // 诊断信息不对称比没有诊断信息更坏。
+        FileLog.Info($"组 {groupId} 落位（权威成员 0x{authority:X}）。");
+
         _liftedGroupId = null;
         _liftAuthority = 0;
 
@@ -761,9 +820,35 @@ internal sealed class Orchestrator : IDisposable
         && Math.Abs(a.Right - b.Right) <= tolerance
         && Math.Abs(a.Bottom - b.Bottom) <= tolerance;
 
+    /// <summary>
+    /// 组成员的最小化状态变了：**只重画分组栏**，让标签立即显示或摘掉「已最小化」。
+    ///
+    /// 这里刻意只做 UI 刷新，绝不发出任何窗口操作。整组联动收起/恢复实现过 ——
+    /// 批量 ShowWindow 与系统自己的激活逻辑互相触发，实测振荡到死循环，
+    /// 用户被迫强杀进程。重画没有副作用，怎么都振荡不起来。
+    /// </summary>
+    private void OnMinimizeStateChanged(nint hwnd)
+    {
+        if (FindGroupByHandle(hwnd) is { } group)
+        {
+            RefreshRail(group);
+        }
+    }
+
     /// <summary>前台窗口变化时同步活动标签，让用户用 Alt+Tab 切换后轨道也保持一致。</summary>
     private void OnForegroundChanged(nint hwnd)
     {
+        // 最小化窗口发出的前台事件是残影，一律忽略。
+        //
+        // 实测（用户机器现场抓取）：窗口最小化之后有一小段时间仍是前台
+        // （iconic=1 且 fg=1）。跟着这条残影去激活它，等于把用户刚收起来的窗口
+        // 又拽出来 —— 这正是之前"最小化时窗口自动打开"的成因之一。
+        // 用户真正调回窗口时，Windows 先恢复再置前台，到这里时已不是最小化。
+        if (WindowEnumerator.IsMinimized(hwnd))
+        {
+            return;
+        }
+
         var group = FindGroupByHandle(hwnd);
         var tab = group is null ? null : FindTabByHandle(group, hwnd);
 
@@ -786,7 +871,62 @@ internal sealed class Orchestrator : IDisposable
             return;
         }
 
+        // 熔断：应用与我们抢焦点时，停手。
+        if (IsForegroundFightDetected(group.Id))
+        {
+            return;
+        }
+
         Apply(_manager.ActivateTab(group.Id, tab.Identity), group.Id);
+    }
+
+    /// <summary>
+    /// 这个组是否正陷入焦点对抗；是则本次不跟随前台。
+    ///
+    /// 只熔断"跟随前台"这一条反射弧，用户显式点标签、点任务栏的路径不受影响 ——
+    /// 那是明确意图，不是回声。熔断本身不发出任何窗口指令，因此它自己不可能振荡。
+    ///
+    /// 阈值定在一秒 8 次：正常使用中人不可能这么快连续切换窗口，
+    /// 而实测的对抗是每秒 22 次，两者相差一个数量级，不会误伤。
+    /// </summary>
+    private bool IsForegroundFightDetected(string groupId)
+    {
+        var now = Environment.TickCount64;
+
+        if (!_foregroundFlips.TryGetValue(groupId, out var state))
+        {
+            state = new ForegroundFlipState { WindowStart = now };
+            _foregroundFlips[groupId] = state;
+        }
+
+        if (now < state.SuppressedUntil)
+        {
+            return true;
+        }
+
+        if (now - state.WindowStart > ForegroundFlipWindowMs)
+        {
+            state.WindowStart = now;
+            state.Count = 0;
+        }
+
+        state.Count++;
+
+        if (state.Count <= ForegroundFlipThreshold)
+        {
+            return false;
+        }
+
+        state.SuppressedUntil = now + ForegroundSuppressMs;
+        state.Count = 0;
+        state.WindowStart = now;
+
+        FileLog.Warn(
+            $"组 {groupId} 出现焦点对抗（1 秒内 {ForegroundFlipThreshold} 次以上活动标签切换），"
+            + $"暂停跟随前台 {ForegroundSuppressMs}ms。"
+            + "常见于应用弹出的新窗口被收进了组 —— 可在设置中关掉「自动把同类窗口合并到一组」。");
+
+        return true;
     }
 
     // ------------------------------------------------------------------
@@ -1192,6 +1332,21 @@ internal sealed class Orchestrator : IDisposable
     }
 
     /// <summary>测试入口：模拟用户双击分组栏空白处。</summary>
+    /// <summary>
+    /// 测试入口：模拟前台窗口变化，走跟随前台那条反射弧。
+    /// 焦点对抗熔断器就挂在这条路径上。
+    /// </summary>
+    internal void ForegroundChangedForTest(nint hwnd) => OnForegroundChanged(hwnd);
+
+    /// <summary>测试入口：这个组当前是否已被焦点对抗熔断。</summary>
+    internal bool IsForegroundSuppressedForTest(string groupId) =>
+        _foregroundFlips.TryGetValue(groupId, out var state)
+        && Environment.TickCount64 < state.SuppressedUntil;
+
+    /// <summary>测试入口：把某个标签设为活动标签，走编排层的正式路径。</summary>
+    internal void ActivateTabForTest(string groupId, WindowIdentity identity) =>
+        Apply(_manager.ActivateTab(groupId, identity), groupId);
+
     internal void RailDoubleClickForTest(string groupId) => OnRailInteraction(new RailInteraction
     {
         GroupId = groupId,
@@ -2268,6 +2423,20 @@ internal sealed class Orchestrator : IDisposable
                 continue;
             }
 
+            // 最小化的成员不参与摆位与压层：它此刻不在屏幕上，摆了也没意义，
+            // 等它恢复时前台事件会触发一轮正常布局。
+            //
+            // **激活要放行。** Activate 对最小化窗口会先 SW_RESTORE —— 这正是
+            // 用户点一个最小化成员的标签时想要的："把它调出来"。曾把激活也过滤掉，
+            // 结果是点标签毫无反应，模型却已切了当前标签，分组栏跟着锚到
+            // 最小化窗口上直接消失。防"最小化瞬间的前台残影把窗口拽回来"
+            // 不在这里做，在 OnForegroundChanged 里按事件来源挡。
+            if (action is AlignWindowAction or LowerWindowAction
+                && WindowEnumerator.IsMinimized(action.Target.Handle))
+            {
+                continue;
+            }
+
             kept.Add(action);
         }
 
@@ -2331,7 +2500,18 @@ internal sealed class Orchestrator : IDisposable
         // 实际响应会有细微出入（最小尺寸限制、自绘边框、DPI 舍入）。
         // 用组矩形会让分组栏比窗口宽出一点点，一眼就能看出是两个东西。
         // 跟着真实窗口走才能严丝合缝。
-        var actual = WindowEnumerator.ReadVisibleBounds(active.Identity.Handle);
+        // 当前标签是最小化窗口时锚定到组矩形，绝不能读它的实际矩形 ——
+        // 那是 (-31989,-32000) 的图标占位符，分组栏会跟着飞出屏幕。
+        // 用户点了一个最小化成员的标签时（恢复还没完成的那一小段），
+        // 分组栏必须留在原地，而不是消失。
+        // 当前标签是最小化窗口时锚定到组矩形，绝不能读它的实际矩形 ——
+        // 那是 (-31989,-32000) 的图标占位符，分组栏会跟着飞出屏幕。
+        // 用户点了一个最小化成员的标签时（恢复还没完成的那一小段），
+        // 分组栏必须留在原地，而不是消失。
+        var actual = WindowEnumerator.IsMinimized(active.Identity.Handle)
+            ? PixelRect.Empty
+            : WindowEnumerator.ReadVisibleBounds(active.Identity.Handle);
+
         var anchor = actual.IsEmpty ? group.Bounds : actual;
 
         if (anchor.IsEmpty)
@@ -2397,12 +2577,25 @@ internal sealed class Orchestrator : IDisposable
         var railStart = Stopwatch.StartNew();
         var rail = GetOrCreateRail(group.Id);
 
+        // 最小化成员的标签要画得出区别。IsIconic 是本进程内的廉价调用，
+        // 成员数在个位数，热路径上可以承受。
+        var minimizedMembers = new HashSet<WindowIdentity>();
+
+        foreach (var tab in group.LiveTabs)
+        {
+            if (WindowEnumerator.IsMinimized(tab.Identity.Handle))
+            {
+                minimizedMembers.Add(tab.Identity);
+            }
+        }
+
         rail.Update(
             new RailRenderState
             {
                 Layout = layout,
                 Tabs = group.Tabs,
                 ActiveIdentity = active.Identity,
+                MinimizedIdentities = minimizedMembers,
                 Theme = RailTheme.For(appearance.ColorScheme),
                 Dpi = dpi,
                 RoundedTabs = appearance.RoundedTabs,
@@ -2532,6 +2725,9 @@ internal sealed class Orchestrator : IDisposable
         // 组没了，全屏状态也跟着作废 —— 留着的话，下一个碰巧复用同一个组 ID
         // 的组会带着一份陌生的"退出全屏该回哪里"。
         _fullscreenGroups.Remove(groupId);
+
+        // 熔断计数同理：组 ID 会被后来的组复用，留着旧计数可能让新组一上来就被熔断。
+        _foregroundFlips.Remove(groupId);
 
         if (_rails.Remove(groupId, out var rail))
         {

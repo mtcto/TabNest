@@ -16,6 +16,15 @@ public sealed record RailRenderState
     public WindowIdentity? HoveredIdentity { get; init; }
     public WindowIdentity? HoveredCloseIdentity { get; init; }
 
+    /// <summary>
+    /// 处于最小化状态的成员。
+    ///
+    /// 它们的标签必须画得出区别（灰字 + 后缀），否则用户最小化一个成员后
+    /// 看分组栏毫无变化，会认定"根本没最小化"—— 这是用户的原话。
+    /// </summary>
+    public IReadOnlySet<WindowIdentity> MinimizedIdentities { get; init; } =
+        new HashSet<WindowIdentity>();
+
     /// <summary>光标是否停在「关闭整组」按钮上。</summary>
     public bool IsCloseGroupHovered { get; init; }
 
@@ -91,7 +100,11 @@ internal static class RailRenderer
         GdiCanvas canvas, RailRenderState state, TabLayout layout, TabItem tab)
     {
         var theme = state.Theme;
-        var isActive = tab.Identity == state.ActiveIdentity;
+        var isMinimized = state.MinimizedIdentities.Contains(tab.Identity);
+
+        // 最小化的标签绝不按"活动"画：窗口都不在屏幕上了，
+        // 高亮它等于告诉用户"这个窗口正显示着"。
+        var isActive = tab.Identity == state.ActiveIdentity && !isMinimized;
         var isHovered = state.HoveredIdentity == tab.Identity;
 
         // 半径为 0 时 FillRoundRect 会退化成 FillRect，正是「传统（直角）」标签样式。
@@ -137,7 +150,12 @@ internal static class RailRenderer
             }
         }
 
-        var title = tab.IsResponding ? tab.DisplayTitle : $"{tab.DisplayTitle}（无响应）";
+        var title = !tab.IsResponding
+            ? $"{tab.DisplayTitle}（无响应）"
+            : isMinimized
+                ? $"{tab.DisplayTitle}（已最小化）"
+                : tab.DisplayTitle;
+
         canvas.DrawText(title, layout.TextBounds, textColor, state.Dpi);
 
         // 关闭按钮的显示与否由策略 + 悬停共同决定，与命中测试调用同一个判定，

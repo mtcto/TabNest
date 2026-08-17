@@ -324,6 +324,40 @@ public sealed class WindowEnumerator(ProcessInspector processes)
     public static bool IsMaximized(nint hwnd) => hwnd != 0 && User32.IsZoomed(hwnd);
 
     /// <summary>把窗口最大化。供诊断与测试模拟用户双击标题栏。</summary>
+    /// <summary>窗口是否处于最小化状态。</summary>
+    public static bool IsMinimized(nint hwnd) => hwnd != 0 && User32.IsIconic(hwnd);
+
+    /// <summary>最小化窗口。仅供测试模拟用户动作。</summary>
+    public static void Minimize(nint hwnd)
+    {
+        if (hwnd != 0)
+        {
+            User32.ShowWindow(hwnd, User32.SW_MINIMIZE);
+        }
+    }
+
+    /// <summary>
+    /// 顶层窗口按 Z 序从上到下的句柄列表。
+    ///
+    /// 组内成员矩形完全相同、层层叠在一起，谁在最上面就只看得见谁 ——
+    /// 因此"窗口回来了没有"这个问题，光看坐标不够，必须看 Z 序。
+    /// 与 <see cref="Enumerate"/> 同走 GetTopWindow → GW_HWNDNEXT 链，理由见类顶部。
+    /// </summary>
+    public static List<nint> TopLevelZOrder()
+    {
+        var order = new List<nint>(256);
+        var hwnd = User32.GetTopWindow(0);
+        var guard = 0;
+
+        while (hwnd != 0 && guard++ < MaxWindows)
+        {
+            order.Add(hwnd);
+            hwnd = User32.GetWindow(hwnd, User32.GW_HWNDNEXT);
+        }
+
+        return order;
+    }
+
     public static void Maximize(nint hwnd)
     {
         if (hwnd != 0)

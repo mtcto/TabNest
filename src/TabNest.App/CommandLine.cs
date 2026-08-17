@@ -16,7 +16,7 @@ internal enum RunKind
     Help,
 }
 
-internal sealed record RunMode(RunKind Kind, bool Json, bool IncludeAll)
+internal sealed record RunMode(RunKind Kind, bool Json, bool IncludeAll, bool Verbose = false)
 {
     /// <summary>命令行模式需要控制台输出；常驻模式不需要，附加控制台反而会干扰用户 shell。</summary>
     public bool NeedsConsole => Kind is not RunKind.Interactive;
@@ -29,6 +29,7 @@ internal static class CommandLine
         var kind = RunKind.Interactive;
         var json = false;
         var includeAll = false;
+        var verbose = false;
 
         foreach (var raw in args)
         {
@@ -76,6 +77,11 @@ internal static class CommandLine
                 case "all":
                     includeAll = true;
                     break;
+                case "verbose":
+                    // 常驻模式日志抬到 Debug，记录每一批窗口指令。
+                    // "点了没反应"这类问题只有这一层能看出指令的内容与顺序。
+                    verbose = true;
+                    break;
                 default:
                     // 未知参数不静默忽略 —— 静默忽略会让用户以为选项生效了。
                     kind = RunKind.Help;
@@ -83,7 +89,7 @@ internal static class CommandLine
             }
         }
 
-        return new RunMode(kind, json, includeAll);
+        return new RunMode(kind, json, includeAll, verbose);
     }
 
     private static string Normalize(string arg) =>
