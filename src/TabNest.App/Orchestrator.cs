@@ -657,6 +657,13 @@ internal sealed class Orchestrator : IDisposable
     private readonly Dictionary<string, ForegroundFlipState> _foregroundFlips = [];
 
     /// <summary>
+    /// 已整组收起的分组 → 代表它的任务栏代理窗口。
+    ///
+    /// 收起期间该组的分组栏保持隐藏、不跟随前台；恢复只由代理窗口的还原消息驱动。
+    /// </summary>
+    private readonly Dictionary<string, GroupTaskbarProxy> _collapsedGroups = [];
+
+    /// <summary>
     /// 屏外停靠的 X 坐标，与系统停靠最小化窗口的传统位置一致，远离一切可见显示器。
     /// </summary>
     private const int ParkedLeft = -32000;
@@ -868,6 +875,13 @@ internal sealed class Orchestrator : IDisposable
                 rail.RestackAboveOwner();
             }
 
+            return;
+        }
+
+        // 整组收起期间不跟随前台：成员都不在屏幕上，跟着谁都没有意义，
+        // 而恢复只应由任务栏代理图标驱动。
+        if (_collapsedGroups.ContainsKey(group.Id))
+        {
             return;
         }
 
@@ -1338,6 +1352,15 @@ internal sealed class Orchestrator : IDisposable
     /// </summary>
     internal void ForegroundChangedForTest(nint hwnd) => OnForegroundChanged(hwnd);
 
+    /// <summary>测试入口：点分组栏的最小化按钮。</summary>
+    internal void MinimizeGroupForTest(string groupId) => CollapseGroup(groupId);
+
+    /// <summary>测试入口：点任务栏代理图标（等同于代理窗口收到 SC_RESTORE）。</summary>
+    internal void RestoreCollapsedForTest(string groupId) => RestoreCollapsedGroup(groupId);
+
+    /// <summary>测试入口：这个组是否处于整组收起状态。</summary>
+    internal bool IsCollapsedForTest(string groupId) => _collapsedGroups.ContainsKey(groupId);
+
     /// <summary>测试入口：这个组当前是否已被焦点对抗熔断。</summary>
     internal bool IsForegroundSuppressedForTest(string groupId) =>
         _foregroundFlips.TryGetValue(groupId, out var state)
@@ -1491,6 +1514,12 @@ internal sealed class Orchestrator : IDisposable
                 SettleGroup(groupId, _liftAuthority);
             }
 
+            return;
+        }
+
+        if (interaction.Action is RailAction.MinimizeGroup)
+        {
+            CollapseGroup(groupId);
             return;
         }
 
@@ -1661,6 +1690,109 @@ internal sealed class Orchestrator : IDisposable
 
         RefreshRail(group);
         PersistSession();
+    }
+
+    /// <summary>
+    /// 整组收起：成员全部最小化，分组栏隐藏，任务栏上留下一个 TabNest 图标。
+    ///
+    /// **只由分组栏的最小化按钮调用。** 绝不由窗口事件触发 —— 见 GroupTaskbarProxy
+    /// 的注释：靠响应成员的最小化事件做批量操作会与系统的激活逻辑互相触发，
+    /// 实测振荡到死循环，用户被迫强杀进程。
+    /// </summary>
+    private void CollapseGroup(string groupId)
+    {
+        if (_manager.FindGroup(groupId) is not { } group || _collapsedGroups.ContainsKey(groupId))
+        {
+            return;
+        }
+
+        var live = group.LiveTabs.ToList();
+
+        if (live.Count == 0)
+        {
+            return;
+        }
+
+        // 先建代理再收窗口。反过来的话，最后一个成员被最小化的瞬间焦点会落到
+        // 别的应用上，用户看到的是"分组消失了，然后任务栏才冒出一个图标"。
+        var proxy = new GroupTaskbarProxy(
+            DescribeCollapsedGroup(group),
+            () => RestoreCollapsedGroup(groupId));
+
+        _collapsedGroups[groupId] = proxy;
+
+        foreach (var tab in live)
+        {
+            WindowEnumerator.Minimize(tab.Identity.Handle);
+        }
+
+        if (_rails.TryGetValue(groupId, out var rail))
+        {
+            rail.HideWindow();
+        }
+
+        FileLog.Info($"组 {groupId} 已整组收起（{live.Count} 个窗口），任务栏保留一个代理图标。");
+    }
+
+    /// <summary>
+    /// 从任务栏代理图标恢复整组。**只由代理窗口的还原消息调用。**
+    /// </summary>
+    private void RestoreCollapsedGroup(string groupId)
+    {
+        if (!_collapsedGroups.Remove(groupId, out var proxy))
+        {
+            return;
+        }
+
+        proxy.Dispose();
+
+        if (_manager.FindGroup(groupId) is not { } group)
+        {
+            return;
+        }
+
+        var activeTab = group.ActiveTab;
+        var active = activeTab?.Identity.Handle ?? 0;
+
+        // **每个**成员都调一次 SW_SHOWNOACTIVATE，活动成员也不例外。
+        //
+        // 刻意不先判断"它是否还处于最小化"：最小化与还原都带动画，IsIconic 在那
+        // 几百毫秒里是个会变的瞬时值，拿它当前置条件，恰好落在动画中间的成员就会
+        // 被跳过、然后永远留在任务栏里回不来。对已正常显示的窗口调它是无害的。
+        var restored = 0;
+
+        foreach (var tab in group.LiveTabs)
+        {
+            WindowEnumerator.RestoreNoActivate(tab.Identity.Handle);
+            restored++;
+        }
+
+        FileLog.Info($"组 {groupId} 已从任务栏代理图标恢复（{restored} 个成员回位）。");
+
+        // 抬起活动成员：**直接下指令，不走 ActivateTab。**
+        //
+        // ActivateTab 是状态迁移，而收起期间活动标签从未变过 —— 领域层认定
+        // "它本来就是活动的"，直接短路返回空结果，一条指令都不产生。
+        // 实测后果：活动成员留在最小化状态，只有其余成员回来了。
+        // 恢复分组要的是"把窗口摆好"这个副作用，不是状态迁移，因此绕开它。
+        if (activeTab is not null)
+        {
+            _ = _controller.ExecuteAsync(
+                new Core.Grouping.ActivateWindowAction(activeTab.Identity));
+        }
+
+        RefreshRail(group);
+    }
+
+    /// <summary>任务栏代理按钮上的文字：让用户一眼看出这是哪个分组。</summary>
+    private static string DescribeCollapsedGroup(GroupSession group)
+    {
+        var active = group.ActiveTab?.DisplayTitle;
+        var count = group.LiveTabCount;
+
+        return string.IsNullOrWhiteSpace(active)
+            ? $"TabNest 分组（{count} 个窗口）"
+            : $"{active} 等 {count} 个窗口 — TabNest";
     }
 
     /// <summary>
@@ -2486,6 +2618,20 @@ internal sealed class Orchestrator : IDisposable
 
     private void RefreshRail(GroupSession group)
     {
+        // 整组已收起时分组栏一律不显示。
+        //
+        // 它是独立窗口，不会随成员一起最小化；不主动收走的话，屏幕上会留下
+        // 一条指向空气的标签栏，点它还能切到已经收起来的窗口。
+        if (_collapsedGroups.ContainsKey(group.Id))
+        {
+            if (_rails.TryGetValue(group.Id, out var collapsed))
+            {
+                collapsed.HideWindow();
+            }
+
+            return;
+        }
+
         var active = group.ActiveTab;
         if (active is null)
         {
@@ -2500,10 +2646,6 @@ internal sealed class Orchestrator : IDisposable
         // 实际响应会有细微出入（最小尺寸限制、自绘边框、DPI 舍入）。
         // 用组矩形会让分组栏比窗口宽出一点点，一眼就能看出是两个东西。
         // 跟着真实窗口走才能严丝合缝。
-        // 当前标签是最小化窗口时锚定到组矩形，绝不能读它的实际矩形 ——
-        // 那是 (-31989,-32000) 的图标占位符，分组栏会跟着飞出屏幕。
-        // 用户点了一个最小化成员的标签时（恢复还没完成的那一小段），
-        // 分组栏必须留在原地，而不是消失。
         // 当前标签是最小化窗口时锚定到组矩形，绝不能读它的实际矩形 ——
         // 那是 (-31989,-32000) 的图标占位符，分组栏会跟着飞出屏幕。
         // 用户点了一个最小化成员的标签时（恢复还没完成的那一小段），
@@ -2728,6 +2870,12 @@ internal sealed class Orchestrator : IDisposable
 
         // 熔断计数同理：组 ID 会被后来的组复用，留着旧计数可能让新组一上来就被熔断。
         _foregroundFlips.Remove(groupId);
+
+        // 任务栏代理必须销毁，否则组已经没了，任务栏上还挂着一个点了没反应的图标。
+        if (_collapsedGroups.Remove(groupId, out var proxy))
+        {
+            proxy.Dispose();
+        }
 
         if (_rails.Remove(groupId, out var rail))
         {

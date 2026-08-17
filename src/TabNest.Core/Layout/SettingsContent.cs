@@ -131,6 +131,17 @@ public sealed record ChoiceBlock : ContentBlock
 }
 
 /// <summary>说明文字块。用于承载"为什么"与限制说明。</summary>
+/// <summary>
+/// 关于页要展示的环境信息。
+/// 由 App 层填充：领域层不读程序集元数据，也不知道数据目录在哪。
+/// </summary>
+public sealed record AboutInfo
+{
+    public required string Version { get; init; }
+
+    public string? DataDirectory { get; init; }
+}
+
 public sealed record InfoBlock : ContentBlock
 {
     public required string Text { get; init; }

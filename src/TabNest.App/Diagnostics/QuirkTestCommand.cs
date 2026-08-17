@@ -81,6 +81,8 @@ internal static class QuirkTestCommand
         failures += TestMinimizedMemberIsIgnored(orchestrator, windows);
         Console.WriteLine();
         failures += TestForegroundFightBreaker(orchestrator, windows);
+        Console.WriteLine();
+        failures += TestGroupCollapseToTaskbar(orchestrator, windows);
 
         orchestrator.DissolveEverything();
         PumpMessages(TimeSpan.FromMilliseconds(500));
@@ -268,6 +270,117 @@ internal static class QuirkTestCommand
             trespassers.Count == 0,
             "这些成员盖住了分组栏："
                 + string.Join("、", trespassers.Select(m => $"{m.Title} 顶边 {m.Bounds.Top}")));
+
+        orchestrator.DissolveEverything();
+        PumpMessages(TimeSpan.FromMilliseconds(800));
+
+        return failures;
+    }
+
+    /// <summary>
+    /// 整组收起到任务栏代理图标，再从图标恢复回来。
+    ///
+    /// 这个功能上一次实现时是靠监听成员的最小化事件做批量操作，必然振荡 ——
+    /// 我们自己发出的 ShowWindow 会引来同样的事件，而"这是用户做的还是我们做的"
+    /// 在事件里分辨不出来；实测每秒二十几轮，用户被迫强杀进程。
+    /// 现在收起与恢复各只有一个显式入口（分组栏按钮、代理窗口的 SC_RESTORE），
+    /// 因此这一节除了功能本身，还必须断言**收起之后一切静止**。
+    /// </summary>
+    private static int TestGroupCollapseToTaskbar(
+        Orchestrator orchestrator, List<WindowInfo> harnessWindows)
+    {
+        Console.WriteLine("── 整组收起到任务栏图标，并能恢复 ──");
+
+        var failures = 0;
+
+        var normals = harnessWindows
+            .Where(w => w.Title.Contains("普通窗口", StringComparison.Ordinal))
+            .ToList();
+
+        if (normals.Count < 2)
+        {
+            Console.WriteLine("[跳过] 需要两个「普通窗口」测试窗口。");
+            return failures;
+        }
+
+        var a = normals[0].Identity.Handle;
+        var b = normals[1].Identity.Handle;
+
+        orchestrator.MergeForTest(a, b);
+        PumpMessages(TimeSpan.FromSeconds(2));
+
+        var group = orchestrator.GroupsForTest.FirstOrDefault();
+
+        failures += Check("已建组", group is not null, "没有建出组");
+
+        if (group is null)
+        {
+            return failures;
+        }
+
+        var workArea = MonitorLookup.ForWindow(a).WorkArea;
+        var boundsBefore = WindowEnumerator.ReadVisibleBounds(a);
+
+        orchestrator.MinimizeGroupForTest(group.Id);
+        PumpMessages(TimeSpan.FromSeconds(2));
+
+        failures += Check(
+            "整组已收起",
+            orchestrator.IsCollapsedForTest(group.Id),
+            "收起状态没有建立");
+
+        failures += Check(
+            "两个成员都已最小化",
+            WindowEnumerator.IsMinimized(a) && WindowEnumerator.IsMinimized(b),
+            $"a 最小化={WindowEnumerator.IsMinimized(a)} b={WindowEnumerator.IsMinimized(b)}");
+
+        var railWhileCollapsed = orchestrator.GetRailForTest(group.Id);
+
+        failures += Check(
+            "分组栏已随之隐藏",
+            railWhileCollapsed is null || !railWhileCollapsed.IsVisible,
+            "分组栏还留在屏幕上 —— 它指向的窗口已经全被收起了");
+
+        // 收起之后必须静止。上一版在这里会开始每秒二十几轮的振荡。
+        PumpMessages(TimeSpan.FromSeconds(3));
+
+        failures += Check(
+            "收起之后保持静止，没有窗口自己弹回来",
+            WindowEnumerator.IsMinimized(a) && WindowEnumerator.IsMinimized(b)
+                && orchestrator.IsCollapsedForTest(group.Id),
+            "等待后状态变了 —— 有东西在和系统互相触发");
+
+        // 点任务栏代理图标。
+        orchestrator.RestoreCollapsedForTest(group.Id);
+        PumpMessages(TimeSpan.FromSeconds(3));
+
+        failures += Check(
+            "收起状态已解除",
+            !orchestrator.IsCollapsedForTest(group.Id),
+            "恢复之后收起状态还在");
+
+        failures += Check(
+            "两个成员都已退出最小化",
+            !WindowEnumerator.IsMinimized(a) && !WindowEnumerator.IsMinimized(b),
+            $"a 最小化={WindowEnumerator.IsMinimized(a)} b={WindowEnumerator.IsMinimized(b)}");
+
+        var boundsAfter = WindowEnumerator.ReadVisibleBounds(a);
+
+        Console.WriteLine($"收起前 {boundsBefore}，恢复后 {boundsAfter}");
+
+        failures += Check(
+            "恢复后的窗口回到屏幕上",
+            !boundsAfter.IsEmpty
+                && boundsAfter.Right > workArea.Left && boundsAfter.Left < workArea.Right
+                && boundsAfter.Bottom > workArea.Top && boundsAfter.Top < workArea.Bottom,
+            $"窗口落在 {boundsAfter}，与工作区 {workArea} 没有交集");
+
+        var railAfter = orchestrator.GetRailForTest(group.Id);
+
+        failures += Check(
+            "分组栏已回来",
+            railAfter is { IsVisible: true },
+            $"分组栏可见={railAfter?.IsVisible} —— 恢复后标签栏没有回来");
 
         orchestrator.DissolveEverything();
         PumpMessages(TimeSpan.FromMilliseconds(800));

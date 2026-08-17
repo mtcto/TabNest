@@ -28,6 +28,9 @@ public sealed record RailRenderState
     /// <summary>光标是否停在「关闭整组」按钮上。</summary>
     public bool IsCloseGroupHovered { get; init; }
 
+    /// <summary>光标是否停在「整组最小化」按钮上。</summary>
+    public bool IsMinimizeHovered { get; init; }
+
     /// <summary>拖拽重排时的插入指示线位置，null 表示不显示。</summary>
     public int? DropIndicatorIndex { get; init; }
 
@@ -82,6 +85,7 @@ internal static class RailRenderer
             state.ShowBackgroundBar ? state.Theme.Background : state.Theme.WindowBlend);
 
         PaintMenuButton(canvas, state);
+        PaintMinimizeButton(canvas, state);
         PaintCloseGroupButton(canvas, state);
 
         foreach (var layout in state.Layout.Tabs)
@@ -201,6 +205,37 @@ internal static class RailRenderer
                 PixelRect.FromSize(x, centerY + (i * gap) - (lineHeight / 2), lineWidth, lineHeight),
                 state.Theme.InactiveText);
         }
+    }
+
+    /// <summary>
+    /// 画右侧「整组最小化」按钮：一条横线，照抄窗口标题栏最小化按钮的样子。
+    ///
+    /// 悬停用普通高亮而不是警示色 —— 收起分组是可逆的，与「关闭整组」不同量级。
+    /// </summary>
+    private static void PaintMinimizeButton(GdiCanvas canvas, RailRenderState state)
+    {
+        var bounds = state.Layout.MinimizeButton;
+        if (bounds.Width <= 0)
+        {
+            return;
+        }
+
+        if (state.IsMinimizeHovered)
+        {
+            canvas.FillRoundRect(bounds, state.Theme.HoverTabBackground, 4);
+        }
+
+        // 横线宽度取按钮宽度的一半左右，线宽跟随 DPI，至少 1 像素。
+        var lineWidth = Math.Max(8, bounds.Width / 2);
+        var thickness = Math.Max(1, state.Dpi / 96);
+
+        canvas.FillRect(
+            PixelRect.FromSize(
+                bounds.Left + ((bounds.Width - lineWidth) / 2),
+                bounds.Top + ((bounds.Height - thickness) / 2),
+                lineWidth,
+                thickness),
+            state.Theme.InactiveText);
     }
 
     /// <summary>

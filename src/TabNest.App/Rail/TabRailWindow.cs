@@ -34,6 +34,11 @@ public enum RailAction
     MoveGroup,
 
     /// <summary>
+    /// 点击了分组栏的最小化按钮：整组收起到任务栏上的单个 TabNest 图标。
+    /// </summary>
+    MinimizeGroup,
+
+    /// <summary>
     /// 双击了分组栏的空白处：切换整组的全屏。
     /// 与双击普通窗口标题栏的手感一致 —— 分组栏在用户心里就是这个组的标题栏。
     /// </summary>
@@ -280,15 +285,20 @@ internal sealed class TabRailWindow : Win32Window
         var hoveredCloseGroup = state.Layout.CloseGroupButton.Width > 0
             && state.Layout.CloseGroupButton.Contains(point);
 
+        var hoveredMinimize = state.Layout.MinimizeButton.Width > 0
+            && state.Layout.MinimizeButton.Contains(point);
+
         if (state.HoveredIdentity != hoveredTab
             || state.HoveredCloseIdentity != hoveredClose
-            || state.IsCloseGroupHovered != hoveredCloseGroup)
+            || state.IsCloseGroupHovered != hoveredCloseGroup
+            || state.IsMinimizeHovered != hoveredMinimize)
         {
             UpdateState(state with
             {
                 HoveredIdentity = hoveredTab,
                 HoveredCloseIdentity = hoveredClose,
                 IsCloseGroupHovered = hoveredCloseGroup,
+                IsMinimizeHovered = hoveredMinimize,
             });
         }
     }
@@ -300,13 +310,15 @@ internal sealed class TabRailWindow : Win32Window
         if (_state is { } state
             && (state.HoveredIdentity is not null
                 || state.HoveredCloseIdentity is not null
-                || state.IsCloseGroupHovered))
+                || state.IsCloseGroupHovered
+                || state.IsMinimizeHovered))
         {
             UpdateState(state with
             {
                 HoveredIdentity = null,
                 HoveredCloseIdentity = null,
                 IsCloseGroupHovered = false,
+                IsMinimizeHovered = false,
             });
         }
     }
@@ -328,6 +340,13 @@ internal sealed class TabRailWindow : Win32Window
         // 关闭整组按钮在松手时才触发，避免误按下即关掉一整组窗口。
         if (state.Layout.CloseGroupButton.Width > 0
             && state.Layout.CloseGroupButton.Contains(point))
+        {
+            return;
+        }
+
+        // 最小化按钮同理，松手才算。
+        if (state.Layout.MinimizeButton.Width > 0
+            && state.Layout.MinimizeButton.Contains(point))
         {
             return;
         }
@@ -390,6 +409,13 @@ internal sealed class TabRailWindow : Win32Window
         if (wasMovingGroup)
         {
             Emit(RailAction.MoveGroupEnd, default);
+            return;
+        }
+
+        if (state.Layout.MinimizeButton.Width > 0
+            && state.Layout.MinimizeButton.Contains(point))
+        {
+            Emit(RailAction.MinimizeGroup, default);
             return;
         }
 

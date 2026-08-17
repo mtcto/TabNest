@@ -36,6 +36,9 @@ public sealed record RailMetrics
     /// <summary>右侧「关闭整组」按钮宽度。为 0 时不显示。</summary>
     public int CloseGroupButtonWidth { get; init; } = 30;
 
+    /// <summary>右侧「整组最小化」按钮宽度。为 0 时不显示。</summary>
+    public int MinimizeButtonWidth { get; init; } = 30;
+
     /// <summary>
     /// 顶部圆角半径。由承载窗口的实际圆角决定，不写死 ——
     /// Windows 10 不给窗口圆角，Windows 11 上应用也可声明直角，
@@ -69,6 +72,7 @@ public sealed record RailMetrics
             CloseButtonSize = S(CloseButtonSize),
             MenuButtonWidth = S(MenuButtonWidth),
             CloseGroupButtonWidth = S(CloseGroupButtonWidth),
+            MinimizeButtonWidth = S(MinimizeButtonWidth),
 
             // 圆角半径由调用方按承载窗口实测填入，已是物理像素，不再缩放。
             TopCornerRadius = TopCornerRadius,
@@ -168,6 +172,9 @@ public sealed record RailLayout
     /// <summary>右侧「关闭整组」按钮。宽度为 0 表示隐藏。</summary>
     public PixelRect CloseGroupButton { get; init; }
 
+    /// <summary>右侧「整组最小化」按钮。宽度为 0 表示隐藏。</summary>
+    public PixelRect MinimizeButton { get; init; }
+
     /// <summary>顶部圆角半径，跟随承载窗口。</summary>
     public int TopCornerRadius { get; init; }
 
@@ -186,6 +193,13 @@ public sealed record RailLayout
         }
 
         if (CloseGroupButton.Width > 0 && CloseGroupButton.Contains(point))
+        {
+            return false;
+        }
+
+        // 最小化按钮也要排除，否则在它上面按下会变成"拖动整组"，
+        // 而且双击它会触发整组全屏 —— 用户想收起，结果放大了。
+        if (MinimizeButton.Width > 0 && MinimizeButton.Contains(point))
         {
             return false;
         }
@@ -283,10 +297,23 @@ public static class TabRailLayoutEngine
             ? PixelRect.FromSize(metrics.SidePadding, 0, menuWidth, metrics.Height)
             : PixelRect.Empty;
 
+        // 右侧按钮从右往左排：关闭整组在最外，最小化紧靠其左。
+        //
+        // 顺序照抄窗口标题栏的惯例（最小化在关闭左边），肌肉记忆能直接迁移；
+        // 反过来放会让人在想收起分组时点到"关掉所有窗口"。
         var closeWidth = metrics.CloseGroupButtonWidth;
         var closeGroupButton = closeWidth > 0
             ? PixelRect.FromSize(
                 railBounds.Width - metrics.SidePadding - closeWidth, 0, closeWidth, metrics.Height)
+            : PixelRect.Empty;
+
+        var minimizeWidth = metrics.MinimizeButtonWidth;
+        var minimizeRight = closeWidth > 0
+            ? closeGroupButton.Left
+            : railBounds.Width - metrics.SidePadding;
+
+        var minimizeButton = minimizeWidth > 0
+            ? PixelRect.FromSize(minimizeRight - minimizeWidth, 0, minimizeWidth, metrics.Height)
             : PixelRect.Empty;
 
         var live = new List<TabItem>(tabs.Count);
@@ -306,22 +333,26 @@ public static class TabRailLayoutEngine
                 Tabs = [],
                 MenuButton = menuButton,
                 CloseGroupButton = closeGroupButton,
+                MinimizeButton = minimizeButton,
                 TopCornerRadius = metrics.TopCornerRadius,
             };
         }
 
-        var available = railBounds.Width - (metrics.SidePadding * 2) - menuWidth - closeWidth;
+        var available = railBounds.Width
+            - (metrics.SidePadding * 2) - menuWidth - closeWidth - minimizeWidth;
         var uniformWidth = ComputeTabWidth(available, live.Count, metrics);
 
         var layouts = new List<TabLayout>(live.Count);
         var x = metrics.SidePadding + menuWidth;
 
-        // 标签绝不能越过关闭整组按钮：盖住它等于用户再也关不掉这个组。
-        // 上限取按钮左边界本身 —— 标签右边界与它重合是允许的（不重叠），
+        // 标签绝不能越过右侧按钮：盖住它们等于用户再也关不掉、收不起这个组。
+        // 上限取最靠左那个按钮的左边界 —— 标签右边界与它重合是允许的（不重叠），
         // 多减一个间距会让恰好放得下的最后一个标签被误判为溢出。
-        var limit = closeGroupButton.Width > 0
-            ? closeGroupButton.Left
-            : railBounds.Width - metrics.SidePadding;
+        var limit = minimizeButton.Width > 0
+            ? minimizeButton.Left
+            : closeGroupButton.Width > 0
+                ? closeGroupButton.Left
+                : railBounds.Width - metrics.SidePadding;
 
         foreach (var tab in live)
         {
@@ -385,6 +416,7 @@ public static class TabRailLayoutEngine
             Tabs = layouts,
             MenuButton = menuButton,
             CloseGroupButton = closeGroupButton,
+            MinimizeButton = minimizeButton,
             TopCornerRadius = metrics.TopCornerRadius,
             HiddenTabCount = live.Count - layouts.Count,
         };

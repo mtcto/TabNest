@@ -325,6 +325,17 @@ public abstract class Win32Window : IDisposable
     public void HideWindow() => User32.ShowWindow(_hwnd, User32.SW_HIDE);
 
     /// <summary>
+    /// 以最小化状态显示，且不抢焦点。
+    ///
+    /// 任务栏代理窗口用它：拿到一个任务栏按钮，却不占屏幕面积、不打断用户操作。
+    /// </summary>
+    public void ShowMinimizedNoActivate() =>
+        User32.ShowWindow(_hwnd, User32.SW_SHOWMINNOACTIVE);
+
+    /// <summary>改窗口标题。任务栏按钮上的文字就是它。</summary>
+    public void SetWindowTitle(string title) => User32.SetWindowText(_hwnd, title);
+
+    /// <summary>
     /// 捕获鼠标，让按住拖动期间的移动与松手消息在光标离开窗口后仍然送达。
     /// 拖动交互必须调用：分组条拖快了光标会瞬间甩出窗口，不捕获就丢松手事件。
     /// </summary>
@@ -386,6 +397,30 @@ public abstract class Win32Window : IDisposable
         public const uint CtlColorEdit = WindowClass.WM_CTLCOLOREDIT;
         public const uint CtlColorStatic = WindowClass.WM_CTLCOLORSTATIC;
         public const uint CtlColorBtn = WindowClass.WM_CTLCOLORBTN;
+
+        /// <summary>系统命令：最小化、还原、关闭等。任务栏按钮点击会走它。</summary>
+        public const uint SysCommand = WindowClass.WM_SYSCOMMAND;
+    }
+
+    /// <summary>
+    /// <see cref="Messages.SysCommand"/> 的命令码。
+    /// 判定时必须先 <c>wParam &amp; 0xFFF0</c> —— 低 4 位被系统用作内部标志。
+    /// </summary>
+    public static class SystemCommands
+    {
+        public const long Mask = 0xFFF0;
+        public const long Restore = 0xF120;
+        public const long Minimize = 0xF020;
+    }
+
+    /// <summary>任务栏代理窗口需要的样式。</summary>
+    public static class ProxyStyles
+    {
+        /// <summary>可最小化的普通窗口：有标题栏与系统菜单，才会正常出现在任务栏。</summary>
+        public const long MinimizableWindow = 0x00C00000 | 0x00080000 | 0x00020000;
+
+        /// <summary>强制出现在任务栏上。</summary>
+        public const long AppWindow = 0x00040000;
     }
 
     /// <summary>普通窗口样式。设置中心用它，而不是轨道那种无边框弹出窗口。</summary>

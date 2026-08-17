@@ -156,7 +156,10 @@ public sealed class SettingsWindow : Win32Window
 
         var dpi = Dpi;
         var metrics = new SettingsMetrics().ScaleTo(dpi);
-        var page = SettingsPages.Build(_page, _settings);
+        var page = SettingsPages.Build(
+            _page,
+            _settings,
+            new AboutInfo { Version = BuildInfo.DisplayVersion, DataDirectory = AppPaths.Root });
 
         // 先用一次性画布测量，再交给渲染器绘制。
         // 测量需要设备上下文来算文本尺寸，而此时还没进入 BeginPaint。

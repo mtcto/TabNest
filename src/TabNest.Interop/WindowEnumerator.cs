@@ -327,12 +327,26 @@ public sealed class WindowEnumerator(ProcessInspector processes)
     /// <summary>窗口是否处于最小化状态。</summary>
     public static bool IsMinimized(nint hwnd) => hwnd != 0 && User32.IsIconic(hwnd);
 
-    /// <summary>最小化窗口。仅供测试模拟用户动作。</summary>
+    /// <summary>最小化窗口。</summary>
     public static void Minimize(nint hwnd)
     {
         if (hwnd != 0)
         {
             User32.ShowWindow(hwnd, User32.SW_MINIMIZE);
+        }
+    }
+
+    /// <summary>
+    /// 把最小化的窗口调回来，但**不抢焦点**。
+    ///
+    /// 整组恢复时只有活动成员该拿到焦点，其余成员只是回到原位待在下层。
+    /// 用 SW_RESTORE 会让每个成员各抢一次前台，屏幕连闪几下。
+    /// </summary>
+    public static void RestoreNoActivate(nint hwnd)
+    {
+        if (hwnd != 0)
+        {
+            User32.ShowWindow(hwnd, User32.SW_SHOWNOACTIVATE);
         }
     }
 

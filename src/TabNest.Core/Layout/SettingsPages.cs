@@ -31,9 +31,19 @@ public static class SettingsPages
         _ => "关于",
     };
 
-    public static PageContent Build(SettingsPage page, AppSettings settings)
+    /// <param name="about">
+    /// 关于页要展示的环境信息（版本号、数据目录）。由 App 层提供 ——
+    /// 领域层不去读程序集元数据，也不知道文件系统在哪。传 null 时关于页只显示固定文案。
+    /// </param>
+    public static PageContent Build(
+        SettingsPage page, AppSettings settings, AboutInfo? about = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
+
+        if (page is SettingsPage.About)
+        {
+            return About(about);
+        }
 
         return page switch
         {
@@ -42,7 +52,7 @@ public static class SettingsPages
             SettingsPage.Grouping => Grouping(settings),
             SettingsPage.Colors => Colors(settings),
             SettingsPage.Rules => Rules(settings),
-            _ => About(),
+            _ => About(about),
         };
     }
 
@@ -515,21 +525,40 @@ public static class SettingsPages
         ],
     };
 
-    private static PageContent About() => new()
+    private static PageContent About(AboutInfo? about)
     {
-        Page = SettingsPage.About,
-        Title = "关于",
-        Blocks =
-        [
-            new InfoBlock
+        var blocks = new List<ContentBlock>(3);
+
+        // 版本号放在最前面，且单独成块。
+        //
+        // 用户报问题时第一句总是"我用的哪个版本"，翻不到就只能猜；
+        // 数据目录同理 —— 日志与配置都在那里，让人能直接找过去。
+        if (about is not null)
+        {
+            blocks.Add(new SectionBlock
             {
-                Text = "TabNest —— 把任意 Windows 窗口组织成标签工作区。\n\n"
-                    + "所有设置与分组快照都保存在本机，不会上传任何数据。\n"
-                    + "日志只记录窗口标题与进程名这类定位问题必需的元数据，"
-                    + "绝不记录窗口内容、文档内容或键盘输入。",
-            },
-        ],
-    };
+                Title = $"TabNest {about.Version}",
+                Description = about.DataDirectory is { Length: > 0 } dir
+                    ? $"配置、分组快照与日志都在 {dir}"
+                    : null,
+            });
+        }
+
+        blocks.Add(new InfoBlock
+        {
+            Text = "TabNest —— 把任意 Windows 窗口组织成标签工作区。\n\n"
+                + "所有设置与分组快照都保存在本机，不会上传任何数据。\n"
+                + "日志只记录窗口标题与进程名这类定位问题必需的元数据，"
+                + "绝不记录窗口内容、文档内容或键盘输入。",
+        });
+
+        return new PageContent
+        {
+            Page = SettingsPage.About,
+            Title = "关于",
+            Blocks = blocks,
+        };
+    }
 
     // ------------------------------------------------------------------
     // 写回

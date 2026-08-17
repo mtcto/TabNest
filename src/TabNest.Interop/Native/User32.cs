@@ -119,6 +119,12 @@ internal static partial class User32
         StringMarshalling = StringMarshalling.Utf16)]
     public static partial int GetClassName(nint hWnd, Span<char> lpClassName, int nMaxCount);
 
+    /// <summary>改窗口标题。任务栏按钮上的文字取自它。</summary>
+    [LibraryImport(Lib, EntryPoint = "SetWindowTextW", SetLastError = true,
+        StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetWindowText(nint hWnd, string lpString);
+
     // ---- 样式 ----
 
     public const int GWL_STYLE = -16;
@@ -175,6 +181,9 @@ internal static partial class User32
     public const int SW_SHOWNOACTIVATE = 4;
     public const int SW_SHOW = 5;
     public const int SW_MINIMIZE = 6;
+
+    /// <summary>以最小化状态显示且不激活。任务栏代理窗口靠它拿到按钮而不抢焦点。</summary>
+    public const int SW_SHOWMINNOACTIVE = 7;
     public const int SW_RESTORE = 9;
 
     [LibraryImport(Lib, SetLastError = true)]
