@@ -6,6 +6,8 @@
 
 **给每一个 Windows 应用加上浏览器式标签页 —— 且不向任何一个进程注入 DLL。**
 
+<img src="assets/tabnest-demo.webp" width="760" alt="TabNest 演示：把两个窗口拖到一起合并成标签组，点标签切换，拖出来拆分">
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4.svg)](https://dotnet.microsoft.com/download)
 [![Platform](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4.svg)](#运行环境)

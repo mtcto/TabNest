@@ -6,6 +6,8 @@
 
 **Browser-style tabs for every Windows app — without injecting a single DLL into any of them.**
 
+<img src="assets/tabnest-demo.webp" width="760" alt="TabNest demo — drag two windows together and they merge into a tabbed group; click a tab to switch, drag one out to split">
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4.svg)](https://dotnet.microsoft.com/download)
 [![Platform](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4.svg)](#requirements)
